@@ -1,33 +1,47 @@
 # coding: utf-8
-
 import requests
 import rsa
 import re
 import binascii
 
 from Crypto.PublicKey import RSA
+from collections import OrderedDict
+
+from common.utils import check_code, http_request
 
 
 class User(object):
-    def __init__(self, schema="http", host=(), base_uri=None):
+    """
+    User model for NGE sso
+    """
+    _schema = "http"
+    _host = ("trade", 80)
+    _base_uri = "/api/v1"
+
+    _host_public_key = None
+
+    _identity_patterns = {
+        "email": re.compile(r'[a-zA-Z.-]+@[\w.-]+'),
+        "telephone": re.compile(r'[+\d-]+')
+    }
+
+    def __init__(self, schema: str = "", host: tuple = (),
+                 base_uri: str = "", key_bit: int = 1024,
+                 identity: str = "", password: str = "", captcha: str = ""):
         self._login = False
 
-        self._schema = schema
+        if schema:
+            self._schema = schema
 
-        if not host:
-            host = ("trade", 80)
-        self._host = host
+        if host:
+            self._host = host
 
-        if not base_uri:
-            base_uri = "/api/v1"
-
-        self._base_uri = base_uri
+        if base_uri:
+            self._base_uri = base_uri
 
         self._session = requests.Session()
 
-        self._host_public_key = self._get_public_key()
-
-        priv_key = RSA.generate(1024)
+        priv_key = RSA.generate(key_bit)
 
         self._private_key = rsa.PrivateKey.load_pkcs1(
             priv_key.export_key())
@@ -35,20 +49,32 @@ class User(object):
 
         self._api_key = ""
         self._api_secret = ""
-        self._user_info = None
+        self.user_info = None
+
+        if identity and password:
+            self.login(identity=identity, password=password, captcha=captcha)
 
     @property
-    def base_url(self):
-        return "{schema}://{host[0]}:{host[1]}/{base_uri}/{endpoint}".format(
-            schema=self._schema, host=self._host,
-            base_uri=self._base_uri.lstrip("/"),
-            endpoint=self.__class__.__name__.lower())
-
-    @property
-    def rsa_public_key(self):
+    def rsa_public_key(self, full_format=False):
+        """
+        Get user's RSA public key content in PKCS#8 format.
+        :param full_format:
+            True: "-----BEGIN PUBLIC KEY-----\n"
+                  "{key data}\n"
+                  "-----END PUBLIC KEY-----"
+            False: {key data}
+        :return:
+        """
         key_string = self._public_key.export_key(pkcs=8).decode()
 
+        if full_format:
+            return key_string
+
         return "".join(key_string.split("\n")[1:-1])
+
+    @property
+    def logged(self):
+        return self._login
 
     @property
     def api_key(self):
@@ -58,26 +84,17 @@ class User(object):
     def api_secret(self):
         return self._api_secret
 
-    def _request(self, endpoint, **kwargs):
-        response = self._session.post(
-            "{}/{}".format(self.base_url, endpoint.lstrip("/")),
-            **kwargs)
+    @classmethod
+    def base_url(cls):
+        return "{schema}://{host[0]}:{host[1]}/{base_uri}/{endpoint}".format(
+            schema=cls._schema, host=cls._host,
+            base_uri=cls._base_uri.lstrip("/"),
+            endpoint=cls.__name__.lower())
 
-        if not response.ok:
-            raise requests.RequestException(response=response)
-
-        if self._login or "login" == endpoint:
-            if "X-Auth-Token" in response.headers:
-                self._session.headers.update({
-                    "x-auth-token": response.headers["X-Auth-Token"]
-                })
-
-            self._session.cookies.update(response.cookies)
-
-        return response.json()
-
-    def _get_public_key(self):
-        result = self._request("getPublicKey")
+    @classmethod
+    def _get_public_key(cls):
+        result = http_request(
+            cls.base_url() + "/getPublicKey").json()
 
         pub_key_string = result["result"]
 
@@ -95,24 +112,131 @@ class User(object):
 
         return pub_key
 
-    def _rsa_encrypt(self, message: [str, bytes]):
+    @classmethod
+    def _rsa_encrypt(cls, message):
+        if not cls._host_public_key:
+            cls._host_public_key = cls._get_public_key()
+
         if isinstance(message, str):
             message = message.encode()
 
         return binascii.b2a_base64(
-            rsa.encrypt(message, self._host_public_key)).decode().strip()
+            rsa.encrypt(message, cls._host_public_key)).decode().strip()
+
+    @classmethod
+    def _get_identity(cls, identity):
+        for name, pattern in cls._identity_patterns.items():
+            if pattern.match(identity):
+                return {name: identity}
+
+        return dict()
+
+    @classmethod
+    def register(cls, identity: str, password: str,
+                 captcha: str = "", invite: str = ""):
+        """
+        Register user
+        :param identity: User identity: email or mobile
+        :param password: User password
+        :param captcha: Captcha code
+        :param invite: Invite code
+        :return: Logged in <User> instance if succeed else None
+        """
+        register_data = {
+            "password": cls._rsa_encrypt(password),
+            "confirm": "",
+            "verifyCode": captcha,
+            "inviteCode": invite
+        }
+
+        failed_message = {
+            1: "Duplicate user identity: {}".format(identity)
+        }
+
+        register_data.update(cls._get_identity(identity))
+
+        if len(register_data) <= 4:
+            raise ValueError(
+                "Invalid identity[{}], valid identity patterns: {}".format(
+                    identity, ", ".join(cls._identity_patterns.keys())))
+
+        result = http_request(
+            cls.base_url() + "/register",
+            json=register_data).json()
+
+        if check_code(result):
+            _user = cls(identity=identity, password=password)
+
+            return _user
+
+        try:
+            print(failed_message[result["result"]])
+        except KeyError:
+            print("Unknown error while register user: {}".format(identity))
+
+    def _request(self, endpoint, **kwargs):
+        response = http_request(
+            uri="{}/{}".format(self.base_url(), endpoint.lstrip("/")),
+            session=self._session,
+            **kwargs
+        )
+
+        if self._login or "login" == endpoint:
+            if "X-Auth-Token" in response.headers:
+                self._session.headers.update({
+                    "x-auth-token": response.headers["X-Auth-Token"]
+                })
+
+            self._session.cookies.update(response.cookies)
+
+        return response.json()
 
     def _rsa_decrypt(self, secret):
         secret = binascii.a2b_base64(secret)
 
         return rsa.decrypt(secret, self._private_key).decode().strip()
 
-    @staticmethod
-    def _check_code(result):
-        if "result" in result:
-            result = result["result"]
+    def login(self, identity: str, password: str, captcha: str = ""):
+        """
+        Login user
+        :param identity:
+        :param password:
+        :param captcha:
+        :return:
+        """
+        login_data = {
+            "password": self._rsa_encrypt(password),
+            "type": "account",
+            "verifyCode": captcha
+        }
 
-        return "0" == result["code"]
+        login_data.update(self._get_identity(identity))
+
+        if len(login_data) <= 3:
+            raise ValueError(
+                "Invalid identity[{}], valid identity patterns: {}".format(
+                    identity, ", ".join(self._identity_patterns.keys())))
+
+        result = self._request(endpoint="login", json=login_data)
+
+        if check_code(result):
+            self._login = True
+            self.user_info = result["result"]
+
+        return result
+
+    def logout(self):
+        if not self._login:
+            Exception("please login first.")
+
+        result = self._request("logout")
+
+        if check_code(result):
+            self._login = False
+            self._session = requests.Session()
+            self.user_info = None
+            self._api_key = ""
+            self._api_secret = ""
 
     def get_api_key(self):
         if not self._login:
@@ -122,45 +246,38 @@ class User(object):
             endpoint="getUserSysApiKey",
             data=self.rsa_public_key)
 
-        if self._check_code(result) and "secret" in result["result"]:
+        if check_code(result) and "secret" in result["result"]:
             self._api_key = result["result"]["apiKey"]
             self._api_secret = self._rsa_decrypt(result["result"]["secret"])
 
-    def login(self, identity, password, capcha=None):
-        patterns = {
-            "email": re.compile(r'[a-zA-Z.-]+@[\w.-]+'),
-            "mobile": re.compile(r'[+\d-]+')
-        }
+    def __repr__(self):
+        info = OrderedDict()
 
-        login_data = {
-            "password": self._rsa_encrypt(password),
-            "type": "account"
-        }
+        if self.user_info:
+            info.update({
+                "UserName": self.user_info["userName"],
+                "UserID": self.user_info["userId"],
+                "Telephone": self.user_info["telephone"],
+                "Email": self.user_info["email"]
+            })
 
-        for name, pattern in patterns.items():
-            if pattern.match(identity):
-                login_data.update({
-                    name: identity
-                })
+        return "User<class 'sso.User'>: {}".format(info)
 
-        if len(login_data) <= 2:
-            raise ValueError(
-                "Invalid identity[{}], valid identity patterns: {}"
-                .format(identity, ", ".join(patterns.keys())))
-
-        result = self._request(endpoint="login", json=login_data)
-
-        if self._check_code(result):
-            self._login = True
-            self._user_info = result["result"]
-
-        return result
+    def __del__(self):
+        if not self._session:
+            self._session.close()
 
 
 if __name__ == "__main__":
-    user = User()
+    user1 = User()
 
-    user.login("journeyblue@163.com", "yuanyang")
-    user.get_api_key()
+    user1.login("journeyblue@163.com", "yuanyang")
+    user1.get_api_key()
 
-    print()
+    print("{}\n{}".format(user1.api_key, user1.api_secret))
+
+    user1.logout()
+
+    user2 = User.register("a@quantdo.cn", "a")
+
+    print(user2)
