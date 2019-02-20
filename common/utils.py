@@ -3,6 +3,7 @@
 import os
 import sys
 import logging
+import requests
 
 
 def _format_path(_path):
@@ -55,3 +56,26 @@ def path(file_path):
         msg = u'Invalid path["{}"].'.format(file_path)
         logging.error(msg)
         raise ValueError(msg)
+
+
+def check_code(result):
+    if "result" in result:
+        result = result["result"]
+
+    if isinstance(result, int):
+        return 0 == result
+
+    return "0" == result["code"]
+
+
+def http_request(uri, method="POST", session=None, **kwargs):
+    if not session:
+        session = requests.Session()
+
+    response = getattr(session, method.lower())(
+        uri, **kwargs)
+
+    if not response.ok:
+        raise requests.RequestException(response=response)
+
+    return response
