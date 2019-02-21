@@ -5,8 +5,10 @@ import time
 import uuid
 import re
 import yaml
+import os
 
 from collections import OrderedDict
+from itertools import product
 
 from bravado.client import SwaggerClient
 from bravado.requests_client import RequestsClient
@@ -15,7 +17,7 @@ from bravado_core.exception import SwaggerValidationError
 
 from BitMEXAPIKeyAuthenticator import APIKeyAuthenticator
 
-from common.utils import path
+from common.utils import path, pushd
 
 
 def correct_data(json_data):
@@ -106,8 +108,30 @@ def nge(test=True, config=None, api_key=None, api_secret=None):
             'formats': [GUID_FORMATTER]
         }
 
-    spec_dict = yaml.safe_load(open(path("@/swagger/nge.yaml"),
-                                    encoding="utf-8").read())
+    spec_dir = path("@/swagger")
+    spec_name = ("nge", "bitmex")
+    spec_extension = ("yaml", "yml", "json")
+
+    load_method = {
+        "yaml": yaml.safe_load,
+        "yml": yaml.safe_load,
+        "json": json.dumps
+    }
+
+    with pushd(spec_dir):
+        spec_file = ""
+
+        for name, ext in product(spec_name, spec_extension):
+            spec_file = ".".join([name, ext])
+
+            if os.path.isfile(spec_file):
+                break
+
+        if not spec_file:
+            raise RuntimeError("no valid swagger api define file found.")
+
+        spec_dict = load_method[ext](
+            open(spec_file, encoding="utf-8").read())
 
     if api_key and api_secret:
         request_client = RequestsClient()

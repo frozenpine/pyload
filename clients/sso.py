@@ -131,12 +131,14 @@ class User(object):
             rsa.encrypt(message, cls._host_public_key)).decode().strip()
 
     @classmethod
-    def _get_identity(cls, identity):
+    def _get_identity_dict(cls, identity):
         for name, pattern in cls._identity_patterns.items():
             if pattern.match(identity):
                 return {name: identity}
 
-        return dict()
+        raise ValueError(
+            "Invalid identity[{}], valid identity patterns: {}".format(
+                identity, ", ".join(cls._identity_patterns.keys())))
 
     @classmethod
     def register(cls, identity: str, password: str,
@@ -160,12 +162,7 @@ class User(object):
             1: "Duplicate user identity: {}".format(identity)
         }
 
-        register_data.update(cls._get_identity(identity))
-
-        if len(register_data) <= 4:
-            raise ValueError(
-                "Invalid identity[{}], valid identity patterns: {}".format(
-                    identity, ", ".join(cls._identity_patterns.keys())))
+        register_data.update(cls._get_identity_dict(identity))
 
         result = http_request(
             cls.base_url() + "/register",
@@ -221,12 +218,7 @@ class User(object):
             "verifyCode": captcha
         }
 
-        login_data.update(self._get_identity(identity))
-
-        if len(login_data) <= 3:
-            raise ValueError(
-                "Invalid identity[{}], valid identity patterns: {}".format(
-                    identity, ", ".join(self._identity_patterns.keys())))
+        login_data.update(self._get_identity_dict(identity))
 
         result = self._request(endpoint="login", json=login_data)
 

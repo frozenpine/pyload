@@ -5,6 +5,8 @@ import sys
 import logging
 import requests
 
+from contextlib import contextmanager
+
 
 def _format_path(_path):
     return os.path.abspath(_path).replace('/', os.sep)
@@ -56,6 +58,20 @@ def path(file_path):
         msg = u'Invalid path["{}"].'.format(file_path)
         logging.error(msg)
         raise ValueError(msg)
+
+
+@contextmanager
+def pushd(directory):
+    if not os.path.isdir(directory):
+        raise ValueError(u'"{}" is not a directory.'.format(directory))
+
+    origin_dir = os.curdir
+    os.chdir(directory)
+
+    try:
+        yield
+    finally:
+        os.chdir(origin_dir)
 
 
 def http_request(uri, method="POST", session=None, **kwargs):
