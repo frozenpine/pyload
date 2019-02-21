@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 import re
+import yaml
 
 from collections import OrderedDict
 
@@ -105,8 +106,8 @@ def nge(test=True, config=None, api_key=None, api_secret=None):
             'formats': [GUID_FORMATTER]
         }
 
-    spec_dict = json.loads(open(path("@/swagger/nge.json"),
-                                encoding="utf-8").read())
+    spec_dict = yaml.safe_load(open(path("@/swagger/nge.yaml"),
+                                    encoding="utf-8").read())
 
     if api_key and api_secret:
         request_client = RequestsClient()
