@@ -58,16 +58,6 @@ def path(file_path):
         raise ValueError(msg)
 
 
-def check_code(result):
-    if "result" in result:
-        result = result["result"]
-
-    if isinstance(result, int):
-        return 0 == result
-
-    return "0" == result["code"]
-
-
 def http_request(uri, method="POST", session=None, **kwargs):
     if not session:
         session = requests.Session()

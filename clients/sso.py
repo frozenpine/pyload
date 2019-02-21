@@ -4,10 +4,21 @@ import rsa
 import re
 import binascii
 
+# noinspection PyPackageRequirements
 from Crypto.PublicKey import RSA
 from collections import OrderedDict
 
-from common.utils import check_code, http_request
+from common.utils import http_request
+
+
+def check_code(result):
+    if "result" in result:
+        result = result["result"]
+
+    if isinstance(result, int):
+        return 0 == result
+
+    return "0" == result["code"]
 
 
 class User(object):
@@ -26,8 +37,7 @@ class User(object):
     }
 
     def __init__(self, schema: str = "", host: tuple = (),
-                 base_uri: str = "", key_bit: int = 1024,
-                 identity: str = "", password: str = "", captcha: str = ""):
+                 base_uri: str = "", key_bit: int = 1024):
         self._login = False
 
         if schema:
@@ -50,9 +60,6 @@ class User(object):
         self._api_key = ""
         self._api_secret = ""
         self.user_info = None
-
-        if identity and password:
-            self.login(identity=identity, password=password, captcha=captcha)
 
     @property
     def rsa_public_key(self, full_format=False):
@@ -165,7 +172,8 @@ class User(object):
             json=register_data).json()
 
         if check_code(result):
-            _user = cls(identity=identity, password=password)
+            _user = cls()
+            _user.login(identity=identity, password=password)
 
             return _user
 
@@ -173,6 +181,9 @@ class User(object):
             print(failed_message[result["result"]])
         except KeyError:
             print("Unknown error while register user: {}".format(identity))
+
+        if 1 == result["result"]:
+            return cls
 
     def _request(self, endpoint, **kwargs):
         response = http_request(
@@ -266,18 +277,3 @@ class User(object):
     def __del__(self):
         if not self._session:
             self._session.close()
-
-
-if __name__ == "__main__":
-    user1 = User()
-
-    user1.login("journeyblue@163.com", "yuanyang")
-    user1.get_api_key()
-
-    print("{}\n{}".format(user1.api_key, user1.api_secret))
-
-    user1.logout()
-
-    user2 = User.register("a@quantdo.cn", "a")
-
-    print(user2)

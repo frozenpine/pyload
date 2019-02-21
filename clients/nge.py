@@ -2,11 +2,15 @@
 
 import json
 import time
+import uuid
+import re
 
 from collections import OrderedDict
 
 from bravado.client import SwaggerClient
 from bravado.requests_client import RequestsClient
+from bravado_core.formatter import SwaggerFormat
+from bravado_core.exception import SwaggerValidationError
 
 from BitMEXAPIKeyAuthenticator import APIKeyAuthenticator
 
@@ -23,11 +27,11 @@ def correct_data(json_data):
     }
 
     if "side" in json_data:
-        if check_qty[json_data["side"]](json_data["orderQty"]):
-            return json_data
+        if not check_qty[json_data["side"]](json_data["orderQty"]):
+            raise ValueError("orderQty[{}] mismatch with side[{}]".format(
+                json_data["orderQty"], json_data["side"]))
 
-        raise ValueError("orderQty[{}] mismatch with side[{}]".format(
-            json_data["orderQty"], json_data["side"]))
+        return json_data
 
     if json_data["orderQty"] > 0:
         json_data["side"] = "Buy"
@@ -55,6 +59,30 @@ class NGEAPIKeyAuthenticator(APIKeyAuthenticator):
         return r
 
 
+def guid_validate(guid_string):
+    pattern = re.compile(r'[0-9a-f-]{32,36}|\d{19}', re.I)
+
+    if not pattern.match(guid_string):
+        raise SwaggerValidationError(
+            "guid[{}] is invalid.".format(guid_string))
+
+
+def guid_deserializer(guid_string):
+    try:
+        return uuid.UUID(guid_string)
+    except ValueError:
+        return guid_string
+
+
+GUID_FORMATTER = SwaggerFormat(
+    format="guid",
+    to_wire=lambda guid_obj: str(guid_obj),
+    to_python=guid_deserializer,
+    description="GUID to uuid",
+    validate=guid_validate
+)
+
+
 def nge(test=True, config=None, api_key=None, api_secret=None):
     if test:
         host = 'http://trade'
@@ -68,24 +96,23 @@ def nge(test=True, config=None, api_key=None, api_secret=None):
             # Don't use models (Python classes) instead of dicts for
             # #/definitions/{models}
             'use_models': False,
+            'validate_requests': True,
             # bravado has some issues with nullable fields
             'validate_responses': False,
             # Returns response in 2-tuple of (body, response);
             # if False, will only return body
-            'also_return_response': True
+            'also_return_response': True,
+            'formats': [GUID_FORMATTER]
         }
 
-    spec_dict = json.loads(open(path("@/swagger/bitmex.json"),
+    spec_dict = json.loads(open(path("@/swagger/nge.json"),
                                 encoding="utf-8").read())
-
-    api_key = api_key
-    api_secret = api_secret
 
     if api_key and api_secret:
         request_client = RequestsClient()
 
         request_client.authenticator = NGEAPIKeyAuthenticator(
-            host, api_key, api_secret)
+            host=host, api_key=api_key, api_secret=api_secret)
 
         return SwaggerClient.from_spec(
             spec_dict, origin_url=host, config=config,
