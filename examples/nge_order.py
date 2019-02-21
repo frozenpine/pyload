@@ -1,5 +1,7 @@
 # coding: utf-8
 
+import time
+
 try:
     from clients.nge import nge
     from clients.sso import User
@@ -13,6 +15,8 @@ except ImportError:
 
     from clients.nge import nge
     from clients.sso import User
+
+from random import random, randint, choice
 
 
 if __name__ == "__main__":
@@ -31,18 +35,22 @@ if __name__ == "__main__":
 
     client = nge(test=True, api_key=user.api_key, api_secret=user.api_secret)
 
-    result, response = client.Order.Order_new(
-        symbol="XBTUSD", orderQty=1, price=3536.7).result()
+    start = time.time()
+    for _ in range(10000):
+        rand_price = round(random(), 2)
+        rand_qty = randint(1, 10)
+        rand_side = choice((1, -1))
 
-    if 200 == response.status_code:
-        print(result)
-    else:
-        print(response.reason)
+        result, response = client.Order.Order_new(
+            symbol="XBTUSD", orderQty=rand_qty * rand_side,
+            price=3536 + rand_price).result()
 
-    result, response = client.Order.Order_new(
-        symbol="XBTUSD", orderQty=-1, price=3537.7).result()
+        if 200 != response.status_code:
+            print(response.reason)
 
-    if 200 == response.status_code:
-        print(result)
-    else:
-        print(response.reason)
+    end = time.time()
+
+    last = end - start
+
+    print("insert rate: {}/s".format(round(10000/last), 2))
+    print("total time: {} s".format(last))
