@@ -153,7 +153,7 @@ paths:
         type: string
       - name: permissions
         in: formData
-        description: 'Key Permissions. All keys can read margin and position data.
+        description: 'Key Permissions. All keys can read margin and position user.
           Additional permissions must be added. Available: ["order", "orderCancel",
           "withdraw"].'
         required: false
@@ -1347,7 +1347,7 @@ paths:
       tags:
       - GlobalNotification
       summary: Get your current GlobalNotifications.
-      description: This is an upcoming feature and currently does not return data.
+      description: This is an upcoming feature and currently does not return user.
       operationId: GlobalNotification.get
       parameters: []
       responses:
@@ -2072,7 +2072,7 @@ paths:
       parameters:
       - name: symbol
         in: query
-        description: Instrument symbol. Send a series (e.g. XBT) to get data for the
+        description: Instrument symbol. Send a series (e.g. XBT) to get user for the
           nearest contract in that series.
         required: true
         type: string
@@ -2555,7 +2555,7 @@ paths:
     get:
       tags:
       - Schema
-      summary: Get model schemata for data objects returned by this API.
+      summary: Get model schemata for user objects returned by this API.
       operationId: Schema.get
       parameters:
       - name: model

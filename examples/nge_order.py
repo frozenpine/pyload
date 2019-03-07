@@ -22,9 +22,8 @@ from random import random, randint, choice
 if __name__ == "__main__":
     user = User()
 
-    user.login(identity="yuanyang@quantdo.com.cn", password="yuanyang")
-
-    if not user.logged:
+    if not user.login(
+            identity="09999@qq.com", password="123456"):
         user = User.register(identity="yuanyang@quantdo.com.cn",
                              password="yuanyang")
 
@@ -33,24 +32,41 @@ if __name__ == "__main__":
     if not user.api_key or not user.api_secret:
         raise ValueError("fail to get user's apiKey & apiSecret.")
 
-    client = nge(test=True, api_key=user.api_key, api_secret=user.api_secret)
+    client = nge(api_key=user.api_key, api_secret=user.api_secret)
 
-    start = time.time()
-    for _ in range(10000):
-        rand_price = round(random(), 2)
-        rand_qty = randint(1, 10)
-        rand_side = choice((1, -1))
+    # api_key = "L68h3Fn3QjRaKqhaU82Y"
+    # api_secret = ("2AWH0b47nVxWxRZ14q7x8KH4pAgRp20n96oLHC6PQlI6WT4oU"
+    #               "fJFZiQh0429t7p7I633j3vv55Q9DiuNESdOvnmKux6n01Ogj3y")
+    #
+    # client = nge(api_key=api_key, api_secret=api_secret)
+
+    for _ in range(10):
+        result, response = client.Order.Order_new(
+            symbol="XBTUSD", orderQty=1, price=3536.7).result()
+
+        print(result, response)
 
         result, response = client.Order.Order_new(
-            symbol="XBTUSD", orderQty=rand_qty * rand_side,
-            price=3536 + rand_price).result()
+            symbol="XBTUSD", orderQty=-1, price=3536.7).result()
 
-        if 200 != response.status_code:
-            print(response.reason)
+        print(result, response)
 
-    end = time.time()
-
-    last = end - start
-
-    print("insert rate: {}/s".format(round(10000/last), 2))
-    print("total time: {} s".format(last))
+    # start = time.time()
+    # for _ in range(10000):
+    #     rand_price = round(random(), 2)
+    #     rand_qty = randint(1, 10)
+    #     rand_side = choice((1, -1))
+    #
+    #     result, response = client.Order.Order_new(
+    #         symbol="XBTUSD", orderQty=rand_qty * rand_side,
+    #         price=3536 + rand_price).result()
+    #
+    #     if 200 != response.status_code:
+    #         print(response.reason)
+    #
+    # end = time.time()
+    #
+    # last = end - start
+    #
+    # print("insert rate: {}/s".format(round(10000/last), 2))
+    # print("total time: {} s".format(last))

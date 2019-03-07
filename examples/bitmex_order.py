@@ -15,10 +15,10 @@ if __name__ == "__main__":
     client = bitmex.bitmex(
         test=True, api_key=BITMEX_API_KEY, api_secret=BITMEX_API_SECRET)
 
-    result_buy = client.Order.Order_new(
+    result_buy, response_buy = client.Order.Order_new(
         symbol="XBTUSD", orderQty=10, price=3637.0).result()
 
-    result_sell = client.Order.Order_new(
+    result_sell, response_sell = client.Order.Order_new(
         symbol="XBTUSD", orderQty=-10, price=3637.0).result()
 
     print(result_buy, result_sell)
