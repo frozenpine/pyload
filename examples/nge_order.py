@@ -18,13 +18,27 @@ except ImportError:
 
 from random import random, randint, choice
 
+from bravado_core.exception import SwaggerMappingError
+
 
 if __name__ == "__main__":
     user = User()
 
+    # if not user.login(
+    #         identity="yuanyang@quantdo.com.cn", password="yuanyang"):
+    #     user = User.register(identity="yuanyang@quantdo.com.cn",
+    #                          password="yuanyang")
+    # if not user.login(
+    #         identity="journeyblue@163.com", password="123456"):
+    #     user = User.register(identity="journeyblue@163.com",
+    #                          password="123456")
+    # if not user.login(
+    #         identity="sonny.frozenpine@gmail.com", password="yuanyang"):
+    #     user = User.register(identity="sonny.frozenpine@gmail.com",
+    #                          password="yuanyang")
     if not user.login(
-            identity="09999@qq.com", password="123456"):
-        user = User.register(identity="yuanyang@quantdo.com.cn",
+            identity="yuanyang@frozenpine.dev", password="yuanyang"):
+        user = User.register(identity="yuanyang@frozenpine.dev",
                              password="yuanyang")
 
     user.get_api_key()
@@ -41,8 +55,11 @@ if __name__ == "__main__":
     # client = nge(api_key=api_key, api_secret=api_secret)
 
     for _ in range(10):
-        result, response = client.Order.Order_new(
-            symbol="XBTUSD", orderQty=1, price=3536.7).result()
+        try:
+            result, response = client.Order.Order_new(
+                symbol="XBTUSD", orderQty=1, price=3536.7).result()
+        except SwaggerMappingError as e:
+            raise
 
         print(result, response)
 
@@ -51,22 +68,25 @@ if __name__ == "__main__":
 
         print(result, response)
 
-    # start = time.time()
-    # for _ in range(10000):
-    #     rand_price = round(random(), 2)
-    #     rand_qty = randint(1, 10)
-    #     rand_side = choice((1, -1))
-    #
-    #     result, response = client.Order.Order_new(
-    #         symbol="XBTUSD", orderQty=rand_qty * rand_side,
-    #         price=3536 + rand_price).result()
-    #
-    #     if 200 != response.status_code:
-    #         print(response.reason)
-    #
-    # end = time.time()
-    #
-    # last = end - start
-    #
-    # print("insert rate: {}/s".format(round(10000/last), 2))
-    # print("total time: {} s".format(last))
+    exit()
+
+    start = time.time()
+    for _ in range(5000):
+        rand_price = round(random(), 2)
+        rand_qty = randint(1, 10)
+        # rand_side = choice((1, -1))
+
+        for side in (1, -1):
+            result, response = client.Order.Order_new(
+                symbol="XBTUSD", orderQty=rand_qty * side,
+                price=3536 + rand_price).result()
+
+            if response.status_code != 200:
+                print(response.reason)
+
+    end = time.time()
+
+    last = end - start
+
+    print("insert rate: {}/s".format(round(10000/last, 2)))
+    print("total time: {} s".format(last))
