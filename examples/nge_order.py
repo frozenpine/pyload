@@ -16,7 +16,7 @@ except ImportError:
     from clients.nge import nge
     from clients.sso import User
 
-from random import random, randint, choice
+from random import random, randint
 
 from bravado_core.exception import SwaggerMappingError
 

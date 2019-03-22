@@ -6,7 +6,7 @@ import csv
 import queue
 import sentry_sdk
 
-from random import random, choice, randint
+from random import random, randint
 from threading import Event
 
 # noinspection PyPackageRequirements
@@ -68,7 +68,7 @@ class Order(TaskSet):
                 self.client.Order.Order_new(
                     symbol="XBTUSD",
                     orderQty=rand_qty * side,
-                    price=3536.0)
+                    price=rand_price)
 
 
 class NGE(NGELocust):
