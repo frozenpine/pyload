@@ -3,17 +3,11 @@ import requests
 import rsa
 import re
 import binascii
-import time
 
 # noinspection PyPackageRequirements
 from Crypto.PublicKey import RSA
 from collections import OrderedDict
 from threading import Event
-
-# noinspection PyPackageRequirements
-from locust import Locust, events
-# noinspection PyPackageRequirements
-from locust.exception import StopLocust
 
 from common.utils import http_request
 
@@ -58,7 +52,7 @@ class User(object):
             self._scheme = schema
 
         if host:
-            self._host = host
+            User._host = host
 
         if base_uri:
             self._base_uri = base_uri
@@ -307,69 +301,3 @@ class User(object):
 
     def __del__(self):
         self._session.close()
-
-
-class LocustWrapper(object):
-    def __init__(self, client):
-        self._client = client
-
-    def __getattr__(self, item):
-        origin_attr = getattr(self._client, item)
-
-        def wrapper(*args, **kwargs):
-            start_time = time.time()
-
-            try:
-                result = origin_attr(*args, **kwargs)
-            except Exception as e:
-                end_time = time.time()
-                total_ms = int((end_time - start_time) * 1000)
-
-                events.request_failure.fire(
-                    request_type=self._client.__class__.__name__,
-                    name=item, response_time=total_ms,
-                    exception=e)
-                raise
-
-            end_time = time.time()
-            total_ms = int((end_time - start_time) * 1000)
-
-            if not result:
-                events.request_failure.fire(
-                    request_type=self._client.__class__.__name__,
-                    name=item, response_time=total_ms,
-                    exception=Exception("{} failed.".format(item)))
-            else:
-                events.request_success.fire(
-                    request_type=self._client.__class__.__name__,
-                    name=item, response_time=total_ms,
-                    response_length=0)
-
-            return result
-
-        return wrapper
-
-
-class SSOLocust(Locust):
-    def __init__(self):
-        super(SSOLocust, self).__init__()
-
-        host_pattern = re.compile(
-            r"(?P<scheme>https?)://"
-            r"(?P<host>\w[\w.-]*)(?::(?P<port>\d+))?/?")
-
-        if not self.host:
-            user = User()
-        else:
-            match = host_pattern.match(self.host)
-
-            if not match:
-                raise StopLocust("Invalid host.")
-
-            result = match.groupdict()
-
-            user = User(schema=result["scheme"],
-                        host=(result["host"],
-                              int(result["port"] if result["port"] else 80)))
-
-        self.client = LocustWrapper(user)
