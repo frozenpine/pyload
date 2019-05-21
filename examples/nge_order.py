@@ -5,7 +5,7 @@ import csv
 from queue import Queue
 
 try:
-    from common import path
+    from common.utils import path
     from clients.nge import nge, NGEAPIKeyAuthenticator
     from clients.sso import User
 except ImportError:
@@ -16,13 +16,13 @@ except ImportError:
 
     sys.path.append(os.path.join(CURRENT_DIR, "../"))
 
-    from common import path
+    from common.utils import path
     from clients.nge import nge, NGEAPIKeyAuthenticator
     from clients.sso import User
 
 
 if __name__ == "__main__":
-    host = "http://192.168.1.23"
+    host = "http://127.0.0.1"
 
     client = nge(host=host)
 
@@ -42,4 +42,10 @@ if __name__ == "__main__":
 
             auth_queue.put_nowait(auth)
 
-    # for
+    while not auth_queue.empty():
+        auth = auth_queue.get()
+        client.swagger_spec.http_client.authenticator = auth
+
+        result, rsp = client.Order.Order_cancelAll().result()
+
+        print(rsp, result)

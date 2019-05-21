@@ -11,7 +11,7 @@ from locust import Locust, events
 from locust.exception import StopLocust
 from bravado.client import ResourceDecorator, CallableOperation
 
-from clients.nge import nge, NGEAPIKeyAuthenticator
+from clients.nge import NGEClientPool, NGEAPIKeyAuthenticator
 
 
 class LocustWrapper(object):
@@ -36,8 +36,8 @@ class LocustWrapper(object):
     def __getattr__(self, item):
         origin_attr = getattr(self._client_instance, item)
 
-        logging.info("get %s from LocustWrapper with type %s",
-                     item, type(origin_attr))
+        logging.debug("get %s from LocustWrapper with type %s",
+                      item, type(origin_attr))
 
         def wrapper(*args, **kwargs):
             logging.info("new order.")
@@ -73,14 +73,18 @@ class LocustWrapper(object):
             return result
 
         if isinstance(origin_attr, ResourceDecorator):
-            logging.info("resource wrapped.")
             return LocustWrapper(origin_attr)
 
         if isinstance(origin_attr, CallableOperation):
-            logging.info("resource operation decorated.")
             return wrapper
 
-        logging.info("origin attribute returned.")
+        if isinstance(origin_attr, NGEClientPool.BravadoWrapper):
+            if callable(origin_attr):
+                return wrapper
+
+            return LocustWrapper(origin_attr)
+
+        logging.debug("origin attribute returned.")
 
         return origin_attr
 
@@ -111,7 +115,8 @@ class LazyLoader(object):
         else:
             self._sso_instance = self.User()
 
-        self._client = LocustWrapper(nge(host=self._sso_instance.host()))
+        self._client = LocustWrapper(
+            NGEClientPool(host=self._sso_instance.host(), size=300))
 
     @property
     def logged(self):
