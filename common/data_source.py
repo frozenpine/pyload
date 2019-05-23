@@ -124,14 +124,14 @@ class CatalogedMixin(object):
     def __init__(self, keynames):
         self._keynames = keynames
         self.cataloged_records = {}
-        self._judge_keyname()
+        self._judge_key_name()
         self._make_cataloged_records()
 
-    def _judge_keyname(self):
+    def _judge_key_name(self):
         for key_name in self._keynames:
             if not hasattr(getattr(self, "_record_obj"), key_name):
                 raise ValueError(
-                    u'Invalid keyname["{}"], '
+                    u'Invalid key name["{}"], '
                     u'available key names: {}'.format(
                         key_name, getattr(self, "_column_headers")))
 
