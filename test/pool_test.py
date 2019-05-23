@@ -2,6 +2,8 @@
 
 import unittest
 
+from bravado.client import Spec
+
 from clients.nge import NGEClientPool
 
 
@@ -10,10 +12,6 @@ class PoolTests(unittest.TestCase):
         pool_size = 5
         pool = NGEClientPool(host="http://localhost", size=pool_size)
 
-        # for i in range(pool_size+5):
-        #     pool.Order.Order_new(symbol="XBTUSD",
-        #                          price=7816.5, orderQty=1,
-        #                          side="Buy").result()
-
         self.assertTrue(isinstance(pool.Order, NGEClientPool.BravadoWrapper))
         self.assertTrue(callable(pool.Order.Order_new))
+        self.assertTrue(isinstance(pool.swagger_spec, Spec))
