@@ -10,7 +10,9 @@ import os
 from collections import OrderedDict
 from itertools import product
 from datetime import datetime
-from threading import BoundedSemaphore, Lock
+
+from gevent.threading import Lock
+from gevent.lock import BoundedSemaphore
 
 from bravado.client import SwaggerClient, ResourceDecorator, CallableOperation
 from bravado.http_future import HttpFuture
@@ -158,7 +160,7 @@ def nge(host="http://trade", config=None, api_key=None, api_secret=None):
 
 
 class NGEClientPool(object):
-    class BravadoWrapper(object):
+    class OperationWrapper(object):
         def __init__(self, origin_attr, semaphore):
             self._origin_attr = origin_attr
             self._semaphore = semaphore
@@ -167,8 +169,8 @@ class NGEClientPool(object):
             origin_result = self._origin_attr(*args, **kwargs)
 
             if isinstance(origin_result, HttpFuture):
-                return NGEClientPool.BravadoWrapper(origin_result,
-                                                    self._semaphore)
+                return NGEClientPool.OperationWrapper(
+                    origin_result, self._semaphore)
 
             return origin_result
 
@@ -181,13 +183,26 @@ class NGEClientPool(object):
                 finally:
                     self._semaphore.release()
 
-            if isinstance(origin_attr, (ResourceDecorator,
-                                        CallableOperation)):
-                return NGEClientPool.BravadoWrapper(origin_attr,
-                                                    self._semaphore)
-
             if callable(origin_attr):
                 return wrapper
+
+            return origin_attr
+
+    class ResourceWrapper(object):
+        def __init__(self, origin_attr, semaphore):
+            self._origin_attr = origin_attr
+            self._semaphore = semaphore
+
+        def __getattr__(self, item):
+            origin_attr = getattr(self._origin_attr, item)
+
+            if isinstance(origin_attr, ResourceDecorator):
+                return NGEClientPool.ResourceWrapper(origin_attr,
+                                                     self._semaphore)
+
+            if isinstance(origin_attr, CallableOperation):
+                return NGEClientPool.OperationWrapper(origin_attr,
+                                                      self._semaphore)
 
             return origin_attr
 
@@ -246,4 +261,4 @@ class NGEClientPool(object):
                                              ResourceDecorator):
             return origin_attr
 
-        return NGEClientPool.BravadoWrapper(origin_attr, self._semaphore)
+        return NGEClientPool.ResourceWrapper(origin_attr, self._semaphore)

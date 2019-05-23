@@ -11,6 +11,7 @@ from locust import Locust, events
 from locust.exception import StopLocust
 from bravado.client import ResourceDecorator, CallableOperation
 
+# noinspection PyUnresolvedReferences
 from clients.nge import nge, NGEClientPool, NGEAPIKeyAuthenticator
 
 
@@ -78,11 +79,11 @@ class LocustWrapper(object):
         if isinstance(origin_attr, CallableOperation):
             return wrapper
 
-        if isinstance(origin_attr, NGEClientPool.BravadoWrapper):
-            if callable(origin_attr):
-                return wrapper
-
+        if isinstance(origin_attr, NGEClientPool.ResourceWrapper):
             return LocustWrapper(origin_attr)
+
+        if isinstance(origin_attr, NGEClientPool.OperationWrapper):
+            return wrapper
 
         logging.debug("origin attribute returned.")
 
@@ -115,9 +116,9 @@ class LazyLoader(object):
         else:
             self._sso_instance = self.User()
 
-        # self._client = LocustWrapper(
-        #     NGEClientPool(host=self._sso_instance.host(), size=50))
-        self._client = LocustWrapper(nge(host=self._sso_instance.host()))
+        self._client = LocustWrapper(
+            NGEClientPool(host=self._sso_instance.host(), size=10))
+        # self._client = LocustWrapper(nge(host=self._sso_instance.host()))
 
     @property
     def logged(self):

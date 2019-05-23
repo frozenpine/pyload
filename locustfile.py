@@ -7,10 +7,11 @@ import csv
 import queue
 import sentry_sdk
 
-from threading import Event
+# noinspection PyUnresolvedReferences
+from gevent.event import Event
 from random import choice, random
 
-# noinspection PyPackageRequirements
+# noinspection PyPackageRequirements,PyUnresolvedReferences
 from locust import TaskSet, events, task
 from sentry_sdk.integrations.logging import LoggingIntegration
 
@@ -26,36 +27,36 @@ sentry_sdk.init(integrations=[sentry_logging])
 logging.basicConfig(level=logging.INFO)
 
 
-hatching_event = Event()
-hatching_event.clear()
-
-stop_event = Event()
-stop_event.clear()
-
-
-def hatch_complete(**kwargs):
-    hatching_event.set()
-
-
-def start_hatching(**kwargs):
-    hatching_event.clear()
-    stop_event.clear()
-
-
-def stop_hatching(**kwargs):
-    stop_event.set()
-
-
-events.hatch_complete += hatch_complete
-events.locust_start_hatching += start_hatching
-events.locust_stop_hatching += stop_hatching
+# hatching_event = Event()
+# hatching_event.clear()
+#
+# stop_event = Event()
+# stop_event.clear()
+#
+#
+# def hatch_complete(**kwargs):
+#     hatching_event.set()
+#
+#
+# def start_hatching(**kwargs):
+#     hatching_event.clear()
+#     stop_event.clear()
+#
+#
+# def stop_hatching(**kwargs):
+#     stop_event.set()
+#
+#
+# events.hatch_complete += hatch_complete
+# events.locust_start_hatching += start_hatching
+# events.locust_stop_hatching += stop_hatching
 
 
 class Order(TaskSet):
     # noinspection PyMethodMayBeStatic
-    def on_start(self):
-        hatching_event.wait()
-        logging.info("hatch complete.")
+    # def on_start(self):
+    #     # hatching_event.wait()
+    #     logging.info("hatch complete.")
 
     @task(1000)
     def order_new(self):
@@ -147,3 +148,11 @@ class NGE(NGELocust):
 
         self.order_price_list.extend(
             map(lambda x: 7800 + 0.5 * x, range(1, 51, 1)))
+
+
+if __name__ == "__main__":
+    NGE.host = "http://localhost"
+
+    ins = NGE()
+
+    ins.run()
