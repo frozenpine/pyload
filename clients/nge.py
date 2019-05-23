@@ -96,6 +96,10 @@ DATETIME_FORMATTER = SwaggerFormat(
 
 
 def nge(host="http://trade", config=None, api_key=None, api_secret=None):
+    """
+
+    :rtype: SwaggerClient
+    """
     if not config:
         # See full config options at
         # http://bravado.readthedocs.io/en/latest/configuration.html
@@ -187,7 +191,7 @@ class NGEClientPool(object):
 
             return origin_attr
 
-    def __init__(self, host="http://trade", config=None, size=50):
+    def __init__(self, host="http://trade", config=None, size=200):
         if not config:
             # See full config options at
             # http://bravado.readthedocs.io/en/latest/configuration.html
@@ -238,8 +242,8 @@ class NGEClientPool(object):
 
         origin_attr = getattr(self._next_instance(), item)
 
-        if not origin_attr:
+        if not origin_attr or not isinstance(origin_attr,
+                                             ResourceDecorator):
             return origin_attr
 
-        return NGEClientPool.BravadoWrapper(origin_attr,
-                                            self._semaphore)
+        return NGEClientPool.BravadoWrapper(origin_attr, self._semaphore)
