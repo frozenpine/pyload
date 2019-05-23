@@ -3,6 +3,9 @@ import logging
 import os
 import threading
 import csv
+import sys
+import signal
+import pprint
 
 from time import sleep
 from queue import Queue
@@ -16,11 +19,22 @@ from clients.nge import nge, NGEAPIKeyAuthenticator
 from common.utils import path
 
 
-HOST = ("192.168.1.23", 80)
+HOST = ("3.112.97.161", 80)
+
+SYMBOL = "XBTUSD"
+
+ORDERBOOK_DEPTH = 50
+
+SIZE_SCALE = 0.01
+
+LOOP_DELAY = 5
+
+AUTH_TOTAL = 50
+
+USE_PROXY = False
+PROXY = "http://127.0.0.1:1080"
 
 logging.basicConfig(level=logging.INFO)
-
-RUNNING_FLAG = threading.Event()
 
 
 def host_url(scheme="http", host=("trade", 80)):
@@ -36,15 +50,8 @@ def host_url(scheme="http", host=("trade", 80)):
     raise ValueError("invalid host: {}".format(host))
 
 
-MBL_LOCAL = {
-    "Buy": dict(),
-    "Sell": dict()
-}
-
 AUTH_LIST = list()
 AUTH_QUEUE = Queue()
-
-os.environ["https_proxy"] = "http://127.0.0.1:1080"
 
 
 def handle_exception(ex):
@@ -55,12 +62,23 @@ def handle_exception(ex):
     logging.error(ex.swagger_result)
 
 
-def init_auth(user_file):
+def print_mbl_depth(mbl):
+    pprint.pprint(mbl.keys(), indent=2)
+
+
+def init_auth(user_file, count=None):
+    user_count = 0
+
     with open(user_file) as f:
         reader = csv.DictReader(f)
         for user_data in reader:
             if not user_data["api_key"] or not user_data["api_secret"]:
                 continue
+
+            user_count += 1
+
+            if count and 0 < count < user_count:
+                break
 
             auth = NGEAPIKeyAuthenticator(host=host_url(host=HOST),
                                           api_key=user_data["api_key"],
@@ -72,11 +90,29 @@ def init_auth(user_file):
         "Total {} user loaded.".format(len(AUTH_LIST)))
 
 
-def get_mbl(symbol="XBTUSD", depth=25):
-    client = bitmex(test=False)
+def scale_size(size):
+    return max(int(abs(size) * SIZE_SCALE), 1)
 
-    mbl_online, _ = client.OrderBook.OrderBook_getL2(
-        symbol=symbol, depth=depth).result()
+
+def switch_side(side):
+    side_switch = {
+        "Buy": "Sell",
+        "Sell": "Buy"
+    }
+
+    return side_switch[side]
+
+
+def get_bitmex_mbl(symbol="XBTUSD", depth=25, is_test=False):
+    if USE_PROXY:
+        os.environ["https_proxy"] = PROXY
+
+    client = bitmex(test=is_test)
+
+    mbl_online, _ = client.OrderBook.OrderBook_getL2(symbol=symbol,
+                                                     depth=depth).result()
+
+    os.environ.pop("https_proxy", None)
 
     buy = [order for order in mbl_online if order["side"] == "Buy"]
     sell = [order for order in mbl_online if order["side"] == "Sell"]
@@ -84,7 +120,7 @@ def get_mbl(symbol="XBTUSD", depth=25):
     return sell, buy
 
 
-def make_mbl(client, side, orders):
+def sync_orders(client, symbol, mbl, side):
     for auth in AUTH_LIST:
         client.swagger_spec.http_client.authenticator = auth
 
@@ -92,7 +128,7 @@ def make_mbl(client, side, orders):
             logging.info(
                 "getting history orders for: {}".format(auth.api_key))
             history_orders, _ = client.Order.Order_getOrders(
-                symbol="XBTUSD", count=100).result()
+                symbol=symbol, count=100).result()
         except HTTPUnauthorized as e:
             logging.error(e.swagger_result)
 
@@ -100,29 +136,42 @@ def make_mbl(client, side, orders):
 
         AUTH_QUEUE.put_nowait(auth)
 
+        finished_orders = mbl[side].copy()
+
         for order in [o for o in history_orders if
-                      o["ordStatus"] != "Filled" and
+                      o["ordStatus"] not in ("Filled", "Canceled") and
                       o["side"] == side]:
-            MBL_LOCAL[side][order["price"]] = (order, auth)
+            mbl[side][order["price"]] = (order, auth)
+
+            finished_orders.pop(order["price"], None)
+
+        for finished_price in finished_orders.keys():
+            mbl[side].pop(finished_price)
+
+
+def make_mbl(client, symbol, mbl, side, orders):
+    sync_orders(client, symbol, mbl, side)
 
     for order in orders:
-        exist_order, origin_auth = MBL_LOCAL[side].pop(
+        exist_order, origin_auth = mbl[side].pop(
             order["price"], (None, None))
 
         if exist_order:
             if order["size"] != exist_order["orderQty"]:
+
                 client.swagger_spec.http_client.authenticator = origin_auth
 
                 try:
                     client.Order.Order_amend(
                         orderID=exist_order["orderID"],
-                        orderQty=abs(order["size"])).result()
+                        orderQty=scale_size(order["size"])).result()
                 except (SwaggerError, HTTPBadRequest) as e:
                     handle_exception(e)
+                    mbl[side].pop(order["price"], None)
                 else:
                     exist_order["orderQty"] = order["size"]
 
-            MBL_LOCAL[side][order["price"]] = (exist_order, origin_auth)
+            mbl[side][order["price"]] = (exist_order, origin_auth)
 
             continue
 
@@ -139,28 +188,28 @@ def make_mbl(client, side, orders):
                 continue
 
             result, _ = client.Order.Order_new(
-                symbol=order["symbol"],
-                orderQty=abs(order["size"]),
+                symbol=symbol,
+                orderQty=scale_size(order["size"]),
                 side=order["side"],
                 price=order["price"]).result()
 
-            MBL_LOCAL[side][order["price"]] = (result, new_auth)
+            mbl[side][order["price"]] = (result, new_auth)
         except (SwaggerError, HTTPBadRequest) as e:
             handle_exception(e)
 
 
-def cancel_tail_orders(client, side, prices):
+def trim_orders(client, mbl, side, prices):
     for price in prices:
-        order, origin_auth = MBL_LOCAL[side][price]
+        order, origin_auth = mbl[side][price]
 
         client.swagger_spec.http_client.authenticator = origin_auth
 
         client.Order.Order_cancel(orderID=order["orderID"])
 
 
-def modify_origin(client, side, market_data):
+def modify_or_make_new(client, symbol, mbl, side, market_data):
     for market in market_data:
-        origin_order, origin_auth = MBL_LOCAL[side].pop(
+        origin_order, origin_auth = mbl[side].pop(
             market["price"], (None, None))
 
         if not origin_order:
@@ -172,12 +221,11 @@ def modify_origin(client, side, market_data):
 
             if market["size"] != 0:
                 new_order, _ = client.Order.Order_new(
-                    symbol=market["symbol"],
-                    orderQty=abs(market["size"]),
-                    price=market["price"],
-                    side=side).result()
+                    symbol=symbol, side=side,
+                    orderQty=scale_size(market["size"]),
+                    price=market["price"]).result()
 
-                MBL_LOCAL[side][market["price"]] = (new_order, new_auth)
+                mbl[side][market["price"]] = (new_order, new_auth)
 
             continue
 
@@ -189,6 +237,8 @@ def modify_origin(client, side, market_data):
                     orderID=origin_order["orderID"]).result()
             except (SwaggerError, HTTPBadRequest) as e:
                 handle_exception(e)
+            finally:
+                mbl[side].pop(origin_order["price"], None)
 
             continue
 
@@ -196,140 +246,202 @@ def modify_origin(client, side, market_data):
             try:
                 client.Order.Order_amend(
                     orderID=origin_order["orderID"],
-                    orderQty=abs(market["size"])).result()
+                    orderQty=scale_size(market["size"])).result()
             except (SwaggerError, HTTPBadRequest) as e:
                 handle_exception(e)
+                mbl[side].pop(origin_order["price"], None)
 
                 continue
 
             origin_order["ordQty"] = market["size"]
 
-            MBL_LOCAL[side][market["price"]] = (origin_order, origin_auth)
+            mbl[side][market["price"]] = (origin_order, origin_auth)
 
 
-def orderbook_follower(event, client, ws):
-    event.wait()
+def wait_for_data(running, ws):
+    running.wait()
 
-    while event.is_set():
-        market_depth = ws.market_depth()
-
-        sell = sorted([m for m in market_depth if m["side"] == "Sell"],
-                      key=lambda x: x["price"])[:50]
-
-        buy = sorted([m for m in market_depth if m["side"] == "Buy"],
-                     key=lambda x: x["price"], reverse=True)[:50]
-
-        cancel_tail_orders(client, "Sell",
-                           [p for p in MBL_LOCAL["Sell"] if
-                            p > sell[-1]["price"]])
-        cancel_tail_orders(client, "Buy",
-                           [p for p in MBL_LOCAL["Buy"] if
-                            p < buy[-1]["price"]])
-
-        modify_origin(client, "Sell", sell)
-        modify_origin(client, "Buy", buy)
-
+    while running.is_set() and ("trade" not in ws.data or
+                                "orderBookL2" not in ws.data):
         sleep(1)
 
 
-def trade_follower(event, client, ws):
-    event.wait()
+def orderbook_follower(client, symbol, mbl, ws):
+    is_trim_price = {
+        "Sell": lambda p, p_list: p > p_list[-1]["price"] or
+        p < p_list[0]["price"],
+        "Buy": lambda p, p_list: p > p_list[0]["price"] or
+        p < p_list[-1]["price"]
+    }
 
-    while event.is_set():
-        sleep(1)
+    market_depth = ws.market_depth()
 
-        tick = ws.get_ticker()
+    sell = sorted([m for m in market_depth if m["side"] == "Sell"],
+                  key=lambda x: x["price"])[:ORDERBOOK_DEPTH]
 
-        last_price = tick["last"]
+    buy = sorted([m for m in market_depth if m["side"] == "Buy"],
+                 key=lambda x: x["price"], reverse=True)[:ORDERBOOK_DEPTH]
 
-        new_auth = AUTH_QUEUE.get()
+    # 取消对手方重叠价格
+    trim_orders(
+        client, mbl, "Buy",
+        [price for price in mbl["Buy"].keys() if
+         price >= sell[0]["price"]])
+    # 取消多余挂单
+    trim_orders(
+        client, mbl, "Sell",
+        [price for price in mbl["Sell"].keys() if
+         is_trim_price["Sell"](price, sell)])
 
+    trim_orders(
+        client, mbl, "Sell",
+        [price for price in mbl["Sell"].keys() if
+         price <= buy[0]["price"]])
+
+    trim_orders(
+        client, mbl, "Buy",
+        [price for price in mbl["Buy"].keys() if
+         is_trim_price["Buy"](price, buy)])
+
+    modify_or_make_new(client, symbol, mbl, "Sell", sell)
+    modify_or_make_new(client, symbol, mbl, "Buy", buy)
+
+
+def trade_follower(client, symbol, mbl, ws, last_trade):
+    side_switch = {
+        "Buy": "Sell",
+        "Sell": "Buy"
+    }
+
+    latest_trade = ws.data["trade"][-1]
+
+    if last_trade and last_trade["timestamp"] == latest_trade["timestamp"]:
+        return
+
+    last_trade.update(**latest_trade)
+
+    new_auth = AUTH_QUEUE.get()
+
+    client.swagger_spec.http_client.authenticator = new_auth
+
+    AUTH_QUEUE.put_nowait(new_auth)
+
+    price = last_trade["price"]
+    side = last_trade["side"]
+    order_qty = scale_size(last_trade["size"])
+
+    if price in mbl[side_switch[side]]:
         client.swagger_spec.http_client.authenticator = new_auth
 
-        AUTH_QUEUE.put_nowait(new_auth)
-
-        if last_price in MBL_LOCAL["Buy"]:
-            client.swagger_spec.http_client.authenticator = new_auth
-
-            client.Order.Order_new(
-                symbol="XBTUSD",
-                orderQty=min(int(MBL_LOCAL["Buy"][last_price][0][
-                                     "orderQty"] * 0.3),
-                             1),
-                price=last_price,
-                side="Sell").result()
-
-            continue
-            # return
-
-        if last_price in MBL_LOCAL["Sell"]:
-            client.Order.Order_new(
-                symbol="XBTUSD",
-                orderQty=min(int(MBL_LOCAL["Sell"][last_price][0][
-                                     "orderQty"] * 0.1),
-                             1),
-                price=last_price,
-                side="Buy").result()
-
-            continue
-            # return
-
         client.Order.Order_new(
-            symbol="XBTUSD",
-            orderQty=10,
-            price=last_price,
-            side="Sell").result()
+            symbol=symbol, side=side,
+            price=price, orderQty=order_qty).result()
 
-        client.Order.Order_new(
-            symbol="XBTUSD",
-            orderQty=10,
-            price=last_price,
-            side="Buy",
-            timeInForce="FillOrKill").result()
+        return
+
+    client.Order.Order_new(
+        symbol=symbol, side=side_switch[side],
+        orderQty=order_qty, price=price).result()
+
+    client.Order.Order_new(
+        symbol=symbol, side=side,
+        price=price, orderQty=order_qty,
+        timeInForce="FillOrKill").result()
 
 
-def market_maker(client):
+def market_maker(running, symbol, client, mbl):
+    running.wait()
+
+    if USE_PROXY:
+        os.environ["https_proxy"] = PROXY
+
     ws = BitMEXWebsocket(endpoint="https://www.bitmex.com/api/v1",
-                         symbol="XBTUSD")
+                         symbol=symbol)
 
-    ob_tr = threading.Thread(target=orderbook_follower,
-                             args=(RUNNING_FLAG, client, ws))
-    ob_tr.daemon = True
-    ob_tr.start()
+    wait_for_data(running, ws)
 
-    td_tr = threading.Thread(target=trade_follower,
-                             args=(RUNNING_FLAG, client, ws))
-    td_tr.daemon = True
-    td_tr.start()
+    last_trade = dict()
 
-    # sleep(5)
+    count = 0
 
-    while(ws.ws.sock.connected):
-        sleep(10)
+    try:
+        while ws.ws.sock.connected and running.is_set():
+            if count % 10 == 9:
+                sync_orders(client=client, symbol=symbol,
+                            mbl=mbl, side="Buy")
+                sync_orders(client=client, symbol=symbol,
+                            mbl=mbl, side="Sell")
 
-        # orderbook_follower(RUNNING_FLAG, client, ws)
-        #
-        # trade_follower(RUNNING_FLAG, client, ws)
+            count += 1
 
-        RUNNING_FLAG.set()
+            orderbook_follower(client=client, symbol=symbol, mbl=mbl, ws=ws)
 
-    RUNNING_FLAG.clear()
+            trade_follower(client=client, symbol=symbol, mbl=mbl, ws=ws,
+                           last_trade=last_trade)
+
+            sleep(LOOP_DELAY)
+    finally:
+        os.environ.pop("https_proxy", None)
 
 
-def main():
-    client = nge(host=host_url(host=HOST))
+def main(running, client, symbol, mbl):
+    running.wait()
 
-    init_auth(path("@/CSV/users.csv"))
+    sell, buy = get_bitmex_mbl(symbol=symbol, depth=ORDERBOOK_DEPTH)
 
-    sell, buy = get_mbl(depth=50)
+    make_mbl(client=client, symbol=symbol, mbl=mbl, side="Sell", orders=sell)
+    make_mbl(client=client, symbol=symbol, mbl=mbl, side="Buy", orders=buy)
 
-    make_mbl(client, "Sell", sell)
-    make_mbl(client, "Buy", buy)
+    while running.is_set():
+        market_maker(running=running, symbol=symbol, client=client, mbl=mbl)
 
-    market_maker(client)
+        logging.warning(
+            "websocket disconnected, wait {} seconds to reconnect.".format(
+                LOOP_DELAY))
+
+        sleep(LOOP_DELAY)
+
+
+def exit_func(sig, frame):
+    print("terminate signal[{}] received: {}".format(sig, frame))
+
+    running_flag.clear()
+
+
+def cancel_all(client):
+    for auth in AUTH_LIST:
+        client.swagger_spec.http_client.authenticator = auth
+
+        try:
+            client.Order.Order_cancelAll().result()
+        except (SwaggerError, HTTPBadRequest) as e:
+            handle_exception(e)
 
 
 if __name__ == "__main__":
-    main()
+    running_flag = threading.Event()
 
-    RUNNING_FLAG.clear()
+    init_auth(path("@/CSV/users.csv"), AUTH_TOTAL)
+
+    client_instance = nge(host=host_url(host=HOST))
+
+    if len(sys.argv) > 1 and sys.argv[1] == "cancel":
+        cancel_all(client_instance)
+
+        exit()
+
+    signal.signal(signal.SIGABRT, exit_func)
+    signal.signal(signal.SIGTERM, exit_func)
+    signal.signal(signal.SIGINT, exit_func)
+
+    mbl_local = {
+        "Buy": dict(),
+        "Sell": dict()
+    }
+
+    running_flag.set()
+
+    main(running=running_flag, client=client_instance,
+         symbol=SYMBOL, mbl=mbl_local)
+
+    running_flag.clear()
