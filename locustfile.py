@@ -8,7 +8,6 @@ import queue
 import sentry_sdk
 
 from threading import Event
-from collections import defaultdict
 from random import choice, random
 
 # noinspection PyPackageRequirements
@@ -32,8 +31,6 @@ hatching_event.clear()
 
 stop_event = Event()
 stop_event.clear()
-
-USER_AUTH_QUEUE = queue.Queue()
 
 
 def hatch_complete(**kwargs):
@@ -60,9 +57,9 @@ class Order(TaskSet):
         hatching_event.wait()
         logging.info("hatch complete.")
 
-    @task(50)
+    @task(1000)
     def order_new(self):
-        user_data = USER_AUTH_QUEUE.get()
+        user_data = self.locust.user_auth_queue.get()
 
         logging.info("new auth info retrieved: %s", user_data)
 
@@ -81,11 +78,11 @@ class Order(TaskSet):
         if order:
             self.locust.order_cache[order["orderID"]] = (order, auth)
 
-        USER_AUTH_QUEUE.put_nowait(user_data)
+        self.locust.user_auth_queue.put_nowait(user_data)
 
         time.sleep(random())
 
-    @task(1)
+    @task(20)
     def order_cancel(self):
         for orderID in self.locust.order_cache.copy().keys():
             order, auth = self.locust.order_cache.pop(orderID, (None, None))
@@ -103,11 +100,27 @@ class Order(TaskSet):
 
             self.client.authenticator = origin_auth
 
+    @task(1)
+    def order_cancel_all(self):
+        origin_cache = self.locust.order_cache
+
+        self.locust.order_cache = dict()
+
+        for user_data in self.locust.user_auth_list:
+            self.client.change_auth(**user_data)
+
+            self.client.Order.Order_cancelAll()
+
+        del origin_cache
+
 
 class NGE(NGELocust):
     task_set = Order
 
-    order_cache = defaultdict()
+    user_auth_list = list()
+    user_auth_queue = queue.Queue()
+
+    order_cache = dict()
 
     order_price_list = list()
     order_side_tuple = ("Sell", "Buy")
@@ -129,7 +142,8 @@ class NGE(NGELocust):
                     logging.warning("invalid auth: %s".format(user_data))
                     continue
 
-                USER_AUTH_QUEUE.put_nowait(user_data)
+                self.user_auth_list.append(user_data)
+                self.user_auth_queue.put_nowait(user_data)
 
         self.order_price_list.extend(
             map(lambda x: 7800 + 0.5 * x, range(1, 51, 1)))

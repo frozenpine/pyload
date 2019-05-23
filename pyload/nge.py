@@ -11,7 +11,7 @@ from locust import Locust, events
 from locust.exception import StopLocust
 from bravado.client import ResourceDecorator, CallableOperation
 
-from clients.nge import NGEClientPool, NGEAPIKeyAuthenticator
+from clients.nge import nge, NGEClientPool, NGEAPIKeyAuthenticator
 
 
 class LocustWrapper(object):
@@ -115,8 +115,9 @@ class LazyLoader(object):
         else:
             self._sso_instance = self.User()
 
-        self._client = LocustWrapper(
-            NGEClientPool(host=self._sso_instance.host(), size=300))
+        # self._client = LocustWrapper(
+        #     NGEClientPool(host=self._sso_instance.host(), size=50))
+        self._client = LocustWrapper(nge(host=self._sso_instance.host()))
 
     @property
     def logged(self):
