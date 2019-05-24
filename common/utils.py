@@ -196,16 +196,16 @@ REGEX_PATTERN = re.compile(r'(?:(?P<prefix>reg(?:ex)?://)|/)'
                            r'(?(prefix)|/)$',
                            flags=re.IGNORECASE)
 
-MYSQLCONN_PATTERN = re.compile(r'(?:mysql://)'
-                               r'(?P<user>\w+):(?P<password>\w+)@'
-                               r'(?P<host>[^:/]+)(?::(?P<port>\d+))?'
-                               r'/(?P<db>\w+)'
-                               r'(?:\?charset=(?P<charset>.+))?',
-                               flags=re.IGNORECASE)
+MYSQL_CONN_PATTERN = re.compile(r'(?:mysql://)'
+                                r'(?P<user>\w+):(?P<password>\w+)@'
+                                r'(?P<host>[^:/]+)(?::(?P<port>\d+))?'
+                                r'/(?P<db>\w+)'
+                                r'(?:\?charset=(?P<charset>.+))?',
+                                flags=re.IGNORECASE)
 
-CSVFILE_PATTERN = re.compile(r"(?:csv://)"
-                             r"(?P<base_dir>[^?]+)"
-                             r"(?:\?encoding=(?P<encoding>.+))?")
+CSV_FILE_PATTERN = re.compile(r"(?:csv://)"
+                              r"(?P<base_dir>[^?]+)"
+                              r"(?:\?encoding=(?P<encoding>.+))?")
 
 CONN_PATTERN = re.compile(r'(?P<proto>(?:tcp|udp)+)://'
                           r'(?P<host>[^:]+):'

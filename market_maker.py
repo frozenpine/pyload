@@ -120,7 +120,7 @@ def get_bitmex_mbl(symbol="XBTUSD", depth=25, is_test=False):
     return sell, buy
 
 
-def sync_orders(client, symbol, mbl, side):
+def sync_orders(client, symbol, mbl):
     for auth in AUTH_LIST:
         client.swagger_spec.http_client.authenticator = auth
 
@@ -136,22 +136,22 @@ def sync_orders(client, symbol, mbl, side):
 
         AUTH_QUEUE.put_nowait(auth)
 
-        finished_orders = mbl[side].copy()
+        for side in ("Buy", "Sell"):
 
-        for order in [o for o in history_orders if
-                      o["ordStatus"] not in ("Filled", "Canceled") and
-                      o["side"] == side]:
-            mbl[side][order["price"]] = (order, auth)
+            finished_orders = mbl[side].copy()
 
-            finished_orders.pop(order["price"], None)
+            for order in [o for o in history_orders if
+                          o["ordStatus"] in ("New", "PartiallyFilled") and
+                          o["side"] == side]:
+                mbl[side][order["price"]] = (order, auth)
 
-        for finished_price in finished_orders.keys():
-            mbl[side].pop(finished_price)
+                finished_orders.pop(order["price"], None)
+
+            for finished_price in finished_orders.keys():
+                mbl[side].pop(finished_price)
 
 
 def make_mbl(client, symbol, mbl, side, orders):
-    sync_orders(client, symbol, mbl, side)
-
     for order in orders:
         exist_order, origin_auth = mbl[side].pop(
             order["price"], (None, None))
@@ -335,7 +335,8 @@ def trade_follower(client, symbol, mbl, ws, last_trade):
 
         client.Order.Order_new(
             symbol=symbol, side=side,
-            price=price, orderQty=order_qty).result()
+            price=price, orderQty=order_qty,
+            timeInForce="ImmediateOrCancel").result()
 
         return
 
@@ -349,8 +350,8 @@ def trade_follower(client, symbol, mbl, ws, last_trade):
         timeInForce="FillOrKill").result()
 
 
-def market_maker(running, symbol, client, mbl):
-    running.wait()
+def market_maker(flags, symbol, client, mbl):
+    flags[0].wait()
 
     if USE_PROXY:
         os.environ["https_proxy"] = PROXY
@@ -358,19 +359,16 @@ def market_maker(running, symbol, client, mbl):
     ws = BitMEXWebsocket(endpoint="https://www.bitmex.com/api/v1",
                          symbol=symbol)
 
-    wait_for_data(running, ws)
+    wait_for_data(running=flags[0], ws=ws)
 
     last_trade = dict()
 
     count = 0
 
     try:
-        while ws.ws.sock.connected and running.is_set():
+        while ws.ws.sock.connected and flags[0].is_set():
             if count % 10 == 9:
-                sync_orders(client=client, symbol=symbol,
-                            mbl=mbl, side="Buy")
-                sync_orders(client=client, symbol=symbol,
-                            mbl=mbl, side="Sell")
+                sync_orders(client=client, symbol=symbol, mbl=mbl)
 
             count += 1
 
@@ -380,20 +378,24 @@ def market_maker(running, symbol, client, mbl):
                            last_trade=last_trade)
 
             sleep(LOOP_DELAY)
+
+            flags[1].wait()
     finally:
         os.environ.pop("https_proxy", None)
 
 
-def main(running, client, symbol, mbl):
-    running.wait()
+def main(flags, client, symbol, mbl):
+    flags[0].wait()
+
+    sync_orders(client=client, symbol=symbol, mbl=mbl)
 
     sell, buy = get_bitmex_mbl(symbol=symbol, depth=ORDERBOOK_DEPTH)
 
     make_mbl(client=client, symbol=symbol, mbl=mbl, side="Sell", orders=sell)
     make_mbl(client=client, symbol=symbol, mbl=mbl, side="Buy", orders=buy)
 
-    while running.is_set():
-        market_maker(running=running, symbol=symbol, client=client, mbl=mbl)
+    while flags[0].is_set():
+        market_maker(flags=flags, symbol=symbol, client=client, mbl=mbl)
 
         logging.warning(
             "websocket disconnected, wait {} seconds to reconnect.".format(
@@ -420,6 +422,8 @@ def cancel_all(client):
 
 if __name__ == "__main__":
     running_flag = threading.Event()
+    pause_flag = threading.Event()
+    pause_flag.set()
 
     init_auth(path("@/CSV/users.csv"), AUTH_TOTAL)
 
@@ -432,7 +436,10 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGABRT, exit_func)
     signal.signal(signal.SIGTERM, exit_func)
-    signal.signal(signal.SIGINT, exit_func)
+    signal.signal(signal.SIGUSR1, lambda x, y: cancel_all(client_instance))
+    signal.signal(signal.SIGHUP,
+                  lambda x, y: pause_flag.clear() if pause_flag.is_set()
+                  else pause_flag.set())
 
     mbl_local = {
         "Buy": dict(),
@@ -441,7 +448,7 @@ if __name__ == "__main__":
 
     running_flag.set()
 
-    main(running=running_flag, client=client_instance,
+    main(flags=(running_flag, pause_flag), client=client_instance,
          symbol=SYMBOL, mbl=mbl_local)
 
     running_flag.clear()
