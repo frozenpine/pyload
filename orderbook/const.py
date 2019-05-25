@@ -47,26 +47,30 @@ class OrderStatus(IntEnum):
     Filled = 3
     Rejected = 255
 
+    def is_initial(self) -> bool:
+        return self in (OrderStatus.New,)
+
+    def is_progress(self) -> bool:
+        return self in (OrderStatus.PartiallyFilled,)
+
     def is_finished(self) -> bool:
-        return self not in (OrderStatus.New, OrderStatus.PartiallyFilled)
+        return self in (OrderStatus.Canceled,
+                        OrderStatus.PartiallyFilledCanceled,
+                        OrderStatus.Filled, OrderStatus.Rejected)
 
     def migrate(self, status):
-        if self.is_finished() or status is OrderStatus.New:
+        if self.is_finished() or status.is_initial():
             return None
 
-        if status in (OrderStatus.Canceled, OrderStatus.Filled):
-            if self is OrderStatus.New:
-                return status
+        if status.is_progress():
+            return status
 
-        if status is OrderStatus.PartiallyFilled:
-            if self in (OrderStatus.New, OrderStatus.PartiallyFilled):
-                return status
+        if self.is_initial() and status not in (
+                OrderStatus.PartiallyFilledCanceled,):
+            return status
 
-        if status is OrderStatus.PartiallyFilledCanceled:
-            if self is OrderStatus.PartiallyFilled:
-                return status
-
-        if status is OrderStatus.Rejected:
+        if self.is_progress() and status not in (
+                OrderStatus.Canceled, OrderStatus.Rejected):
             return status
 
         return None

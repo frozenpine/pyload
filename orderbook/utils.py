@@ -35,7 +35,7 @@ def normalize_price(price: float, tick_price: float) -> float:
     return converted
 
 
-def mk_timestamp(value) -> datetime:
+def make_datetime(value) -> datetime:
     if isinstance(value, (int, float)):
         return datetime.utcfromtimestamp(value / 1000)
 
