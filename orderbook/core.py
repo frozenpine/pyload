@@ -1,85 +1,84 @@
 # coding: utf-8
-__all__ = ("OrderBook", "MBL", "PriceLevel", "Order")
+__all__ = ("OrderBook", "MBL", "PriceLevel", "PriceHeap")
 
 import heapq
 import sys
 
+from typing import List
 from collections import defaultdict
-from weakref import ref
+from functools import reduce
+from weakref import ref, ReferenceType
 
-from orderbook.const import (Direction, OrderStatus, OrderType, TimeCondition,
-                             create_enum_by_name)
-from orderbook.utils import normalize_price, make_datetime
+from orderbook import logger
+from orderbook.const import (Direction, create_enum_by_name)
+from orderbook.utils import normalize_price
+from orderbook.structure import Order
 
 
-class DataModel(object):
-    _column_mapper_ = dict()
-    _required_columns_ = set()
+class PriceHeap(object):
+    def __init__(self, direction: Direction):
+        self._direction = -direction.value
 
-    def __init__(self, **kwargs):
-        require_check = self._required_columns_.copy()
+        self._worst_price = None
 
-        for k, v in kwargs.items():
-            if k in self._column_mapper_:
-                v = self._column_mapper_[k](v)
+        self._heap = list()
 
-            setattr(self, k, v)
+    @property
+    def best_price(self) -> float:
+        if self._heap:
+            return self._heap[0] * self._direction
 
-            require_check.discard(k)
+        if self._direction > 0:
+            return sys.float_info.max
+        else:
+            return 0.0
 
-        if require_check:
-            raise AttributeError("columns[{}] is required.".format(
-                ",".join(require_check)))
+    @property
+    def worst_price(self) -> float:
+        if self._worst_price is not None:
+            return self._worst_price * self._direction
+
+        if self._direction > 0:
+            return 0.0
+        else:
+            return sys.float_info.max
+
+    def push(self, price: float):
+        price = self._direction * price
+
+        if self._worst_price is None or price > self._worst_price:
+            self._worst_price = price
+
+        heapq.heappush(self._heap, price)
+
+    def pop(self) -> float:
+        return self._direction * heapq.heappop(self._heap)
+
+    def remove(self, price: float):
+        try:
+            self._heap.remove(price * self._direction)
+        except ValueError as e:
+            logger.warning(e)
+            return
+
+        heapq.heapify(self._heap)
+
+    def top(self, n=25) -> List[float]:
+        n = min(n, len(self._heap))
+
+        return [p * self._direction for p in heapq.nsmallest(n, self._heap)]
 
     def __getitem__(self, item):
-        try:
-            return getattr(self, item)
-        except AttributeError:
-            raise KeyError("invalid attribute name: {}".format(item))
+        return self._heap[item] * self._direction
 
-    def __setitem__(self, key, value):
-        try:
-            return setattr(self, key, value)
-        except AttributeError:
-            raise KeyError("invalid attribute name: {}".format(key))
+    def __len__(self):
+        return len(self._heap)
 
+    def __bool__(self):
+        if self._heap:
+            return True
 
-class Order(DataModel):
-    __slots__ = ("orderID", "clOrdID", "clOrdLinkID",
-                 "account", "symbol", "side", "simpleOrderQty", "orderQty",
-                 "price", "displayQty", "stopPx", "pegOffsetValue",
-                 "pegPriceType", "currency", "settlCurrency", "ordType",
-                 "timeInForce", "execInst", "contingencyType", "exDestination",
-                 "ordStatus", "triggered", "workingIndicator",
-                 "ordRejReason", "simpleLeavesQty", "leavesQty",
-                 "simpleCumQty", "cumQty", "avgPx", "multiLegReportingType",
-                 "text", "transactTime", "timestamp")
-
-    _required_columns_ = {"orderID"}
-
-    _column_mapper_ = {
-        "side": lambda v: create_enum_by_name(Direction, v),
-        "ordStatus": lambda v: create_enum_by_name(OrderStatus, v),
-        "ordType": lambda v: create_enum_by_name(OrderType, v),
-        "timeInForce": lambda v: create_enum_by_name(TimeCondition, v),
-        "timestamp": make_datetime,
-        "transactTime": make_datetime
-    }
-
-    def __eq__(self, other):
-        return self.orderID == other.orderID
-
-
-class Trade(DataModel):
-    __slots__ = ("timestamp", "symbol", "side", "size",
-                 "price", "tickDirection", "trdMatchID", "grossValue",
-                 "homeNotional", "foreignNotional")
-
-    _column_mapper_ = {
-        "timestamp": make_datetime,
-        "tickDirection": lambda v: create_enum_by_name(Direction, v),
-        "side": lambda v: create_enum_by_name(Direction, v)
-    }
+        return False
 
 
 class OrderBook(object):
@@ -91,11 +90,6 @@ class OrderBook(object):
                 "invalid tick_price: {}, must be a float.".format(tick_price))
 
         self._tick_price = tick_price
-
-        # if max_depth <= 0:
-        #     raise ValueError(
-        #         "invalid max_depth: {}, must be a positive int."
-        #         .format(max_depth))
 
         self._max_depth = max_depth
 
@@ -130,13 +124,24 @@ class OrderBook(object):
         """
         return self._mbl[Direction.Sell]
 
+    def __getitem__(self, item):
+        if isinstance(item, Direction):
+            return self._mbl[item]
+
+        if isinstance(item, str):
+            direction = create_enum_by_name(Direction, item)
+
+            return self._mbl[direction]
+
+        raise ValueError("invalid index key: {}".format(item))
+
 
 class MBL(object):
     def __init__(self, direction: Direction, orderbook: OrderBook):
         self._direction = direction
         self._orderbook = orderbook
 
-        self._price_heap = list()
+        self._price_heap = PriceHeap(direction=direction)
 
         self._level_cache = defaultdict(
             lambda: PriceLevel(price=0.0, mbl=self))
@@ -149,28 +154,43 @@ class MBL(object):
              "price heap: {}\nlevel cache: {}").format(
                 self._price_heap, self._level_cache)
 
-        return 0 <= len(self._price_heap) < self._orderbook.max_depth
+        return len(self._price_heap) > 0
 
     def __judge_worst_price(self, price):
         if not self._price_heap:
             return True
 
         switch = {
-            Direction.Sell: lambda: price > max(self._price_heap),
-            Direction.Buy: lambda: price < min(self._price_heap)
+            Direction.Sell: lambda: price > self._price_heap.worst_price,
+            Direction.Buy: lambda: price < self._price_heap.worst_price
         }
 
         return switch[self._direction]()
+
+    def __get_counterparty(self):
+        return self._orderbook[self._direction.flap()]
 
     def __check_overlap(self, price) -> bool:
         switch = {
             Direction.Buy:
-                lambda: price >= self._orderbook.sell_mbl.best_price,
+                lambda p, best_p: p >= best_p,
             Direction.Sell:
-                lambda: price <= self._orderbook.buy_mbl.best_price
+                lambda p, best_p: p <= best_p
         }
 
-        return switch[self._direction]()
+        return switch[self._direction](price,
+                                       self.__get_counterparty().best_price)
+
+    def __get_overlap(self, price) -> (Direction, list):
+        overlap_levels = list()
+
+        while self.__check_overlap(price):
+            level = self.__get_counterparty().pop_level()
+
+            if level:
+                overlap_levels.append(level)
+
+        return self._direction.flap(), overlap_levels
 
     @property
     def best_price(self) -> float:
@@ -180,15 +200,7 @@ class MBL(object):
         :raise RuntimeError
         """
 
-        empty_level_price = {
-            Direction.Buy: 0.0,
-            Direction.Sell: sys.float_info.max
-        }
-
-        if len(self._price_heap) > 0:
-            return self._price_heap[0]
-
-        return empty_level_price[self._direction]
+        return self._price_heap.best_price
 
     @property
     def best_level(self):
@@ -197,14 +209,11 @@ class MBL(object):
         Highest price level in Buy side
         Lowest price level in Sell side
         :return: price level
-        :rtype PriceLevel
+        :rtype Union[PriceLevel, None]
         :raise RuntimeError
         """
 
-        if len(self._price_heap) > 0:
-            return self._level_cache[self.best_price]
-
-        return None
+        return self._level_cache.get(self.best_price, None)
 
     @property
     def depth(self) -> int:
@@ -216,7 +225,14 @@ class MBL(object):
         if self.__check_depth():
             return len(self._price_heap)
 
-    def add_level(self, level):
+        return 0
+
+    def append_level(self, level):
+        """
+        Append exist price level to current mbl
+        :param level: price level
+        :return:
+        """
         if not level.level_price:
             raise ValueError(
                 "invalid level price[{}]".format(level.level_price))
@@ -226,25 +242,53 @@ class MBL(object):
                 level.level_price))
 
         self._level_cache[level.level_price] = level
-        heapq.heappush(self._price_heap, level.level_price)
+        self._price_heap.push(level.level_price)
 
     def delete_level(self, price):
-        if price in self._level_cache:
-            self._level_cache.pop(price)
+        """
+        Delete a price level by price
+        :param price: level price
+        :return:
+        :rtype Optional(PriceLevel)
+        """
 
-            self._price_heap.remove(price)
+        if price not in self._level_cache:
+            return
 
-            heapq.heapify(self._price_heap)
+        level = self._level_cache.pop(price)
+
+        self._price_heap.remove(price)
+
+        return level
 
     def add_order(self, order: Order):
+        if hasattr(order, "side"):
+            if order["side"] != self._direction:
+                raise ValueError(
+                    "order[{}]'s direction[{}] mis-match with current mbl[]"
+                    .format(order["orderID"], order["side"], self._direction))
+        else:
+            order["side"] = self._direction
+
         normalized_price = normalize_price(order["price"],
                                            self._orderbook.tick_price)
-        order["price"] = normalized_price
+        order.price = normalized_price
 
         if normalized_price not in self._level_cache:
-            heapq.heappush(normalized_price, self._price_heap)
+            self._price_heap.push(normalized_price)
 
         self._level_cache[normalized_price].push_order(order)
+
+    def pop_level(self):
+        """
+        Pop best price level
+        :return: PriceLevel
+        :rtype Optional(PriceLevel)
+        """
+        if self.__check_depth():
+            return None
+
+        return self._level_cache.pop(self._price_heap.pop())
 
     def __contains__(self, price):
         price = normalize_price(price, self._orderbook.tick_price)
@@ -265,6 +309,9 @@ class MBL(object):
 
 
 class PriceLevel(object):
+    """
+    This is a FIFO order queue presents a price level in MBL
+    """
     def __init__(self, price: float, mbl: MBL):
         self._price = price
         self._mbl = mbl
@@ -296,9 +343,21 @@ class PriceLevel(object):
 
         return len(self._order_list)
 
+    @property
+    def size(self) -> int:
+        if not self.__check_depth():
+            return 0
+
+        if self.count == 1:
+            return self._order_list[0].orderQty
+
+        result = reduce(lambda x, y: x.orderQty + y.orderQty, self._order_list)
+
+        return result
+
     def __add_to_mbl(self):
         if self._price and self._price not in self._mbl:
-            self._mbl.add_level(self)
+            self._mbl.append_level(self)
 
     def __check_depth(self) -> bool:
         assert len(self._order_list) == len(self._order_index_map), \
@@ -310,36 +369,28 @@ class PriceLevel(object):
         if len(self._order_list) > 0:
             return True
 
-        self._mbl.delete_level(self._price)
+        self._mbl.delete_level(self.level_price)
 
         return False
 
     def __verify_order_price(self, order):
         if not self._price:
-            self._price = order.price
+            self._price = order["price"]
 
             self.__add_to_mbl()
 
             return
 
-        if order.price != self._price:
+        if order["price"] != self._price:
             raise ValueError(
                 "order[{}]'s price[{}] mis-match with current level[{}]"
-                .format(order.orderID, order.price, self._price))
+                .format(order["orderID"], order["price"], self._price))
 
-    def __get_order_idx(self, order):
-        try:
-            return self._order_index_map[order.orderID]
-        except KeyError:
-            raise ValueError(
-                "order[{}] not exists under current level[{}]".format(
-                    order.orderID, self._price))
-
-    def __renew_order_index_map(self, start_index, reduce):
+    def __renew_order_index_map(self, start_index, reduce_idx):
         for order in self._order_list[start_index:]:
-            self._order_index_map[order.orderID] -= reduce
+            self._order_index_map[order.orderID] -= reduce_idx
 
-    def __slice_index(self, idx):
+    def __slice_index(self, idx) -> ReferenceType:
         order = self._order_list.pop(idx)
 
         self._order_index_map.pop(order.orderID)
@@ -350,7 +401,7 @@ class PriceLevel(object):
 
         return ref(order)
 
-    def __slice_left(self, index, keep_index=False):
+    def __slice_left(self, index, keep_index=False) -> List[ReferenceType]:
         if not keep_index:
             index += 1
 
@@ -376,18 +427,18 @@ class PriceLevel(object):
 
         self.__verify_order_price(order)
 
-        if order.orderID in self._order_index_map:
+        if order["orderID"] in self._order_index_map:
             raise ValueError(
                 "order[{}] exists in current level[{}]\n"
                 "origin order: {}\nnew order: {}".format(
-                    order.orderID, self.level_price,
-                    self._order_list[self._order_index_map[order.orderID]],
+                    order["orderID"], self.level_price,
+                    self._order_list[self._order_index_map[order["orderID"]]],
                     order))
 
         self._order_list.append(order)
-        self._order_index_map[order.orderID] = len(self._order_list) - 1
+        self._order_index_map[order["orderID"]] = len(self._order_list) - 1
 
-        return self._order_index_map[order.orderID]
+        return self._order_index_map[order["orderID"]]
 
     def modify_order(self, order: Order) -> int:
         """
@@ -401,30 +452,57 @@ class PriceLevel(object):
 
         self.__verify_order_price(order)
 
-        idx = self.__get_order_idx(order)
+        try:
+            idx = self._order_index_map[order["orderID"]]
+        except KeyError:
+            raise ValueError(
+                "order[{}] not exists under current level[{}]".format(
+                    order["orderID"], self._price))
 
         self._order_list[idx] = order
 
         return idx
 
-    def pop_order(self, order: Order) -> int:
+    def remove_order(self, order: Order) -> int:
         """
-        Pop a order from current level
+        Remove a order from current level
+        if order's price mis-match with current level,
+        an exception will raise
         :param order: Order
         :return: order index in level
+        :raise ValueError
         """
-        if not self.__check_depth():
-            return -1
 
         self.__verify_order_price(order)
 
-        idx = self.__get_order_idx(order)
-
-        self.__slice_index(idx)
+        idx, _ = self.remove_order_by_id(order["orderID"])
 
         return idx
 
-    def trade_volume(self, volume: int) -> (int, list):
+    def remove_order_by_id(self, order_id: str) -> (int, ReferenceType):
+        """
+        Remove a order by its orderID
+        if order id not exist, (-1, None) will return
+        :param order_id: order id
+        :return: order index, removed order's weak ref
+        """
+
+        if not self.__check_depth():
+            return -1, None
+
+        if order_id not in self._order_index_map:
+            return -1, None
+
+        idx = self._order_index_map.get(order_id, -1)
+
+        if idx > 0:
+            order_ref = self.__slice_index(idx)
+        else:
+            order_ref = None
+
+        return idx, order_ref
+
+    def trade_volume(self, volume: int) -> (int, List[ReferenceType]):
         """
         Trade specified volume size
         :param volume: volume size to be traded
@@ -435,7 +513,7 @@ class PriceLevel(object):
         idx = 0
 
         for order in self._order_list:
-            remained_volume -= order.size
+            remained_volume -= order["leavesQty"]
 
             if remained_volume <= 0:
                 break
@@ -445,7 +523,7 @@ class PriceLevel(object):
         traded_orders = self.__slice_left(index=idx,
                                           keep_index=remained_volume < 0)
         if remained_volume < 0:
-            self._order_list[0].size = abs(remained_volume)
+            self._order_list[0]["leavesQty"] = abs(remained_volume)
 
         return max(0, remained_volume), traded_orders
 

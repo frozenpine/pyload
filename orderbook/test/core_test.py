@@ -1,31 +1,10 @@
 # coding: utf-8
-
 import unittest
-import time
+import sys
 
-from datetime import datetime
-
-from orderbook.core import Order, PriceLevel, MBL, OrderBook
-from orderbook.const import TimeCondition, OrderType, Direction
-
-
-class OrderTest(unittest.TestCase):
-    def test_create(self):
-        self.assertRaises((TypeError, AttributeError), Order, foo="bar")
-
-        order = Order(orderID="abc123",
-                      timeInForce="GoodTillCancel",
-                      ordType="MarketIfTouched",
-                      timestamp=time.time() * 1000,
-                      transactTime="2019-05-24T17:07:16.123Z")
-
-        self.assertEqual(TimeCondition.GoodTillCancel, order["timeInForce"])
-        self.assertEqual(OrderType.MarketIfTouched, order["ordType"])
-        self.assertIsInstance(order.timestamp, datetime)
-        self.assertIsInstance(order.transactTime, datetime)
-
-        # required column missing
-        self.assertRaises(AttributeError, Order)
+from ..core import PriceLevel, MBL, OrderBook, PriceHeap
+from ..const import Direction
+from ..structure import Order
 
 
 class PriceLevelTest(unittest.TestCase):
@@ -96,17 +75,17 @@ class PriceLevelTest(unittest.TestCase):
         order1 = Order(orderID="123", price=self._LEVEL_PRICE)
         order2 = Order(orderID="456", price=self._LEVEL_PRICE)
 
-        self.assertEqual(-1, self.level.pop_order(order1))
+        self.assertEqual(-1, self.level.remove_order(order1))
 
         self.level.push_order(order1)
 
         with self.assertRaisesRegex(ValueError,
                                     r"not exists under current level"):
-            self.level.pop_order(order2)
+            self.level.remove_order(order2)
 
         self.level.push_order(order2)
 
-        self.assertEqual(0, self.level.pop_order(order1))
+        self.assertEqual(0, self.level.remove_order(order1))
 
         self.assertEqual(order2, self.level[0])
 
@@ -138,3 +117,87 @@ class PriceLevelTest(unittest.TestCase):
         self.assertEqual([order4], [r() for r in orders])
 
         self.assertFalse(self._LEVEL_PRICE in self.mbl)
+
+
+class PriceHeapTest(unittest.TestCase):
+    def test_len(self):
+        heap = PriceHeap(direction=Direction.Buy)
+
+        self.assertEqual(0, len(heap))
+
+        for price in range(100):
+            heap.push(price)
+
+        self.assertEqual(100, len(heap))
+
+    def test_bool(self):
+        heap = PriceHeap(direction=Direction.Sell)
+
+        self.assertTrue(not heap)
+
+        heap.push(1)
+
+        self.assertFalse(not heap)
+
+    def test_sort(self):
+        buy = PriceHeap(direction=Direction.Buy)
+
+        sell = PriceHeap(direction=Direction.Sell)
+
+        for price in range(1, 101, 1):
+            buy.push(price)
+            sell.push(price)
+
+        self.assertEqual(1, sell[0])
+        self.assertEqual(100, buy[0])
+
+        self.assertEqual([1, 2, 3, 4, 5], sell.top(5))
+        self.assertEqual([100, 99, 98, 97, 96], buy.top(5))
+
+        self.assertEqual(100, sell.worst_price)
+        self.assertEqual(1, buy.worst_price)
+
+        # 99 price left
+        self.assertEqual(1, sell.pop())
+        self.assertEqual(100, buy.pop())
+
+        self.assertEqual(2, sell[0])
+        self.assertEqual(99, buy[0])
+
+        # 49 price w/ price 1 already missing
+        for price in range(1, 50, 1):
+            sell.remove(price)
+
+        self.assertEqual(51, len(sell))
+        self.assertEqual(50, sell[0])
+        self.assertEqual([50, 51, 52], sell.top(3))
+
+        # 51 price w/ price 100 already missing
+        for price in range(50, 101, 1):
+            buy.remove(price)
+
+        self.assertEqual(49, len(buy))
+        self.assertEqual(49, buy[0])
+        self.assertEqual([49, 48, 47], buy.top(3))
+
+
+class MBLTest(unittest.TestCase):
+    _SYMBOL = "XBTUSD"
+    _TICK_PRICE = 0.5
+
+    def setUp(self) -> None:
+        self.ob = OrderBook(symbol=self._SYMBOL, tick_price=self._TICK_PRICE)
+        self.sell = MBL(direction=Direction.Sell, orderbook=self.ob)
+        self.buy = MBL(direction=Direction.Buy, orderbook=self.ob)
+
+    def test_best_price(self):
+        self.assertEqual(sys.float_info.max, self.sell.best_price)
+        self.assertEqual(0, self.buy.best_price)
+
+        for i in range(1, 6, 1):
+            order = Order(orderID=str(i), price=i)
+
+            self.buy.add_order(order)
+
+        self.assertEqual(5, self.buy.best_price)
+        self.assertEqual(5, self.buy.best_level.level_price)

@@ -2,8 +2,8 @@
 
 import unittest
 
-from orderbook.const import (new_direction, Direction, OrderStatus,
-                             create_enum_by_name)
+from ..const import (new_direction, Direction, OrderStatus,
+                     create_enum_by_name)
 
 
 class DirectionTest(unittest.TestCase):
