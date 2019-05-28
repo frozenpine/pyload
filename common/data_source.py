@@ -11,8 +11,8 @@ from abc import abstractmethod
 from ast import literal_eval
 from collections import namedtuple
 
-from common.utils import (REGEX_PATTERN, NUM_PATTERN, MYSQLCONN_PATTERN,
-                          CSVFILE_PATTERN, SET_PATTERN, CONN_PATTERN,
+from common.utils import (REGEX_PATTERN, NUM_PATTERN, MYSQL_CONN_PATTERN,
+                          CSV_FILE_PATTERN, SET_PATTERN, CONN_PATTERN,
                           BOOL_PATTERN, QUOTE_PATTERN)
 
 
@@ -34,7 +34,7 @@ def _sink(value):
 
 
 def _mysql_pattern(value):
-    result = MYSQLCONN_PATTERN.match(value).groupdict()
+    result = MYSQL_CONN_PATTERN.match(value).groupdict()
 
     port = result.get('port')
     charset = result.get('charset')
@@ -46,7 +46,7 @@ def _mysql_pattern(value):
 
 
 def _csv_pattern(value):
-    result = CSVFILE_PATTERN.match(value).groupdict()
+    result = CSV_FILE_PATTERN.match(value).groupdict()
 
     encoding = result.get('encoding')
 
@@ -124,14 +124,14 @@ class CatalogedMixin(object):
     def __init__(self, keynames):
         self._keynames = keynames
         self.cataloged_records = {}
-        self._judge_keyname()
+        self._judge_key_name()
         self._make_cataloged_records()
 
-    def _judge_keyname(self):
+    def _judge_key_name(self):
         for key_name in self._keynames:
             if not hasattr(getattr(self, "_record_obj"), key_name):
                 raise ValueError(
-                    u'Invalid keyname["{}"], '
+                    u'Invalid key name["{}"], '
                     u'available key names: {}'.format(
                         key_name, getattr(self, "_column_headers")))
 

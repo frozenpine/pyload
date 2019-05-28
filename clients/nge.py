@@ -21,36 +21,6 @@ from BitMEXAPIKeyAuthenticator import APIKeyAuthenticator
 from common.utils import path, pushd
 
 
-# def correct_data(json_data):
-#     return json_data
-#
-#     if "orderQty" not in json_data:
-#         return json_data
-#
-#     if json_data["orderQty"] == 0:
-#         raise ValueError("invalid orderQty[{}]".format(json_data["orderQty"]))
-#
-#     check_qty = {
-#         "Buy": lambda qty: qty > 0,
-#         "Sell": lambda qty: qty < 0
-#     }
-#
-#     if "side" in json_data:
-#         if not check_qty[json_data["side"]](json_data["orderQty"]):
-#             raise ValueError("orderQty[{}] mismatch with side[{}]".format(
-#                 json_data["orderQty"], json_data["side"]))
-#
-#         return json_data
-#
-#     if json_data["orderQty"] > 0:
-#         json_data["side"] = "Buy"
-#     else:
-#         json_data["side"] = "Sell"
-#         json_data["orderQty"] = -json_data["orderQty"]
-#
-#     return json_data
-
-
 class NGEAPIKeyAuthenticator(APIKeyAuthenticator):
     def apply(self, r):
         # 5s grace period in case of clock skew
@@ -106,24 +76,11 @@ def guid_deserializer(guid_string):
         return guid_string
 
 
-GUID_FORMATTER = SwaggerFormat(
-    format="guid",
-    to_wire=lambda guid_obj: str(guid_obj),
-    to_python=guid_deserializer,
-    description="GUID to uuid",
-    validate=guid_validate
-)
-
-DATETIME_FORMATTER = SwaggerFormat(
-    format="date-time",
-    to_wire=datetime_serializer,
-    to_python=datetime_deserializer,
-    description="date-time",
-    validate=datetime_validate
-)
-
-
 def nge(host="http://trade", config=None, api_key=None, api_secret=None):
+    """
+
+    :rtype: SwaggerClient
+    """
     if not config:
         # See full config options at
         # http://bravado.readthedocs.io/en/latest/configuration.html
@@ -138,7 +95,19 @@ def nge(host="http://trade", config=None, api_key=None, api_secret=None):
             # Returns response in 2-tuple of (body, response);
             # if False, will only return body
             'also_return_response': True,
-            'formats': [GUID_FORMATTER, DATETIME_FORMATTER]
+            'formats': [SwaggerFormat(
+                            format="guid",
+                            to_wire=lambda guid_obj: str(guid_obj),
+                            to_python=guid_deserializer,
+                            description="GUID to uuid",
+                            validate=guid_validate),
+                        SwaggerFormat(
+                            format="date-time",
+                            to_wire=datetime_serializer,
+                            to_python=datetime_deserializer,
+                            description="date-time",
+                            validate=datetime_validate
+                        )]
         }
 
     spec_dir = path("@/swagger")
@@ -163,8 +132,8 @@ def nge(host="http://trade", config=None, api_key=None, api_secret=None):
         if not spec_file:
             raise RuntimeError("no valid swagger api define file found.")
 
-        spec_dict = load_method[ext](
-            open(spec_file, encoding="utf-8").read())
+        with open(spec_file, encoding="utf-8") as f:
+            spec_dict = load_method[ext](f.read())
 
     if api_key and api_secret:
         request_client = RequestsClient()

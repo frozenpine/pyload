@@ -7,11 +7,10 @@ import csv
 import queue
 import sentry_sdk
 
-from threading import Event
-from collections import defaultdict
+from gevent.threading import Lock
 from random import choice, random
 
-# noinspection PyPackageRequirements
+# noinspection PyPackageRequirements,PyUnresolvedReferences
 from locust import TaskSet, events, task
 from sentry_sdk.integrations.logging import LoggingIntegration
 
@@ -27,42 +26,15 @@ sentry_sdk.init(integrations=[sentry_logging])
 logging.basicConfig(level=logging.INFO)
 
 
-hatching_event = Event()
-hatching_event.clear()
-
-stop_event = Event()
-stop_event.clear()
-
-USER_AUTH_QUEUE = queue.Queue()
-
-
-def hatch_complete(**kwargs):
-    hatching_event.set()
-
-
-def start_hatching(**kwargs):
-    hatching_event.clear()
-    stop_event.clear()
-
-
-def stop_hatching(**kwargs):
-    stop_event.set()
-
-
-events.hatch_complete += hatch_complete
-events.locust_start_hatching += start_hatching
-events.locust_stop_hatching += stop_hatching
-
-
 class Order(TaskSet):
-    # noinspection PyMethodMayBeStatic
-    def on_start(self):
-        hatching_event.wait()
-        logging.info("hatch complete.")
+    def __init__(self, parent):
+        super(Order, self).__init__(parent=parent)
 
-    @task(50)
+        self._lock = Lock()
+
+    @task(1000)
     def order_new(self):
-        user_data = USER_AUTH_QUEUE.get()
+        user_data = self.locust.user_auth_queue.get()
 
         logging.info("new auth info retrieved: %s", user_data)
 
@@ -79,16 +51,21 @@ class Order(TaskSet):
             price=order_price, orderQty=order_volume)
 
         if order:
-            self.locust.order_cache[order["orderID"]] = (order, auth)
+            with self._lock:
+                self.locust.order_cache[order["orderID"]] = (order, auth)
 
-        USER_AUTH_QUEUE.put_nowait(user_data)
+        self.locust.user_auth_queue.put_nowait(user_data)
 
         time.sleep(random())
 
-    @task(1)
+    @task(20)
     def order_cancel(self):
-        for orderID in self.locust.order_cache.copy().keys():
-            order, auth = self.locust.order_cache.pop(orderID, (None, None))
+        with self._lock:
+            origin_cache = self.locust.order_cache
+            self.locust.order_cache = dict()
+
+        for orderID in origin_cache.keys():
+            order, auth = origin_cache.pop(orderID, (None, None))
 
             if not order or not auth:
                 continue
@@ -103,11 +80,29 @@ class Order(TaskSet):
 
             self.client.authenticator = origin_auth
 
+        del origin_cache
+
+    @task(1)
+    def order_cancel_all(self):
+        with self._lock:
+            origin_cache = self.locust.order_cache
+            self.locust.order_cache = dict()
+
+        for user_data in self.locust.user_auth_list:
+            self.client.change_auth(**user_data)
+
+            self.client.Order.Order_cancelAll()
+
+        del origin_cache
+
 
 class NGE(NGELocust):
     task_set = Order
 
-    order_cache = defaultdict()
+    user_auth_list = list()
+    user_auth_queue = queue.Queue()
+
+    order_cache = dict()
 
     order_price_list = list()
     order_side_tuple = ("Sell", "Buy")
@@ -129,7 +124,16 @@ class NGE(NGELocust):
                     logging.warning("invalid auth: %s".format(user_data))
                     continue
 
-                USER_AUTH_QUEUE.put_nowait(user_data)
+                self.user_auth_list.append(user_data)
+                self.user_auth_queue.put_nowait(user_data)
 
         self.order_price_list.extend(
             map(lambda x: 7800 + 0.5 * x, range(1, 51, 1)))
+
+
+if __name__ == "__main__":
+    NGE.host = "http://localhost"
+
+    ins = NGE()
+
+    ins.run()
