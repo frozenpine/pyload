@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 
 from ..structure import Order
-from ..const import OrderType, TimeCondition
+from ..const import OrderType, TimeCondition, Direction
 
 
 class OrderTest(unittest.TestCase):
@@ -25,3 +25,17 @@ class OrderTest(unittest.TestCase):
 
         # required column missing
         self.assertRaises(AttributeError, Order)
+
+    def test_side(self):
+        order1 = Order(orderID="foo", orderQty=10)
+
+        self.assertEqual(Direction.Buy, order1.side)
+        self.assertEqual(10, order1.orderQty)
+
+        order2 = Order(orderID="foo", orderQty=-10)
+
+        self.assertEqual(Direction.Sell, order2.side)
+        self.assertEqual(10, order2.orderQty)
+
+        with self.assertRaisesRegex(ValueError, "mis-match with order side"):
+            Order(orderID="foo", orderQty=10, side="Sell")

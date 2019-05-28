@@ -4,7 +4,7 @@ __all__ = ("OrderBook", "MBL", "PriceLevel", "PriceHeap")
 import heapq
 import sys
 
-from typing import List
+from typing import List, Dict, Optional
 from collections import defaultdict
 from functools import reduce
 from weakref import ref, ReferenceType
@@ -98,6 +98,8 @@ class OrderBook(object):
             Direction.Buy: MBL(direction=Direction.Buy, orderbook=self)
         }
 
+        self._order_price_index_map = dict()
+
     @property
     def symbol(self) -> str:
         return self._symbol
@@ -124,7 +126,39 @@ class OrderBook(object):
         """
         return self._mbl[Direction.Sell]
 
+    def get_price_direction(self, price) -> Optional[Direction]:
+        if price >= self.sell_mbl.best_price:
+            return Direction.Sell
+
+        if price <= self.buy_mbl.best_price:
+            return Direction.Buy
+
+        return None
+
+    def in_gap(self, price: float) -> bool:
+        return self.buy_mbl.best_price < price < self.sell_mbl.best_price
+
+    def overlap_levels(self, price) -> (Optional[Direction], list):
+        direction = self.get_price_direction(price)
+        overlapped = list()
+
+        while not self.in_gap(price):
+            level = self._mbl[direction].pop_level()
+
+            if level:
+                overlapped.append(level)
+
+        return direction, overlapped
+
     def __getitem__(self, item):
+        """
+        Get mbl or price level by value
+        if item is Direction or Direction string, return mbl
+        if item is float price, return price level or None(if level not exist)
+        :param item: direction instance/str or price
+        :return: mbl or price level
+        :raise ValueError
+        """
         if isinstance(item, Direction):
             return self._mbl[item]
 
@@ -133,7 +167,13 @@ class OrderBook(object):
 
             return self._mbl[direction]
 
-        raise ValueError("invalid index key: {}".format(item))
+        if isinstance(item, float):
+            direction = self.get_price_direction(item)
+
+            if direction:
+                return self._mbl[direction][item]
+
+        raise ValueError("invalid index key for mbl side: {}".format(item))
 
 
 class MBL(object):
@@ -145,8 +185,6 @@ class MBL(object):
 
         self._level_cache = defaultdict(
             lambda: PriceLevel(price=0.0, mbl=self))
-
-        self._auth_level_map = defaultdict(list)
 
     def __check_depth(self):
         assert len(self._level_cache) == len(self._price_heap), \
@@ -169,28 +207,6 @@ class MBL(object):
 
     def __get_counterparty(self):
         return self._orderbook[self._direction.flap()]
-
-    def __check_overlap(self, price) -> bool:
-        switch = {
-            Direction.Buy:
-                lambda p, best_p: p >= best_p,
-            Direction.Sell:
-                lambda p, best_p: p <= best_p
-        }
-
-        return switch[self._direction](price,
-                                       self.__get_counterparty().best_price)
-
-    def __get_overlap(self, price) -> (Direction, list):
-        overlap_levels = list()
-
-        while self.__check_overlap(price):
-            level = self.__get_counterparty().pop_level()
-
-            if level:
-                overlap_levels.append(level)
-
-        return self._direction.flap(), overlap_levels
 
     @property
     def best_price(self) -> float:
@@ -261,14 +277,11 @@ class MBL(object):
 
         return level
 
-    def add_order(self, order: Order):
-        if hasattr(order, "side"):
-            if order["side"] != self._direction:
-                raise ValueError(
-                    "order[{}]'s direction[{}] mis-match with current mbl[]"
-                    .format(order["orderID"], order["side"], self._direction))
-        else:
-            order["side"] = self._direction
+    def add_order(self, order: Order) -> int:
+        if order["side"] != self._direction:
+            raise ValueError(
+                "order[{}]'s direction[{}] mis-match with current mbl[]"
+                .format(order["orderID"], order["side"], self._direction))
 
         normalized_price = normalize_price(order["price"],
                                            self._orderbook.tick_price)
@@ -277,7 +290,21 @@ class MBL(object):
         if normalized_price not in self._level_cache:
             self._price_heap.push(normalized_price)
 
-        self._level_cache[normalized_price].push_order(order)
+        return self._level_cache[normalized_price].push_order(order)
+
+    def trade_volume(self, volume: int) -> (int, Dict[float,
+                                                      List[ReferenceType]]):
+        remained_volume = volume
+        traded_levels = dict()
+
+        while remained_volume > 0 and self.__check_depth():
+            best_level = self.best_level
+
+            remained_volume, traded_levels[
+                best_level.level_price] = best_level.trade_volume(
+                remained_volume)
+
+        return remained_volume, traded_levels
 
     def pop_level(self):
         """
@@ -291,6 +318,11 @@ class MBL(object):
         return self._level_cache.pop(self._price_heap.pop())
 
     def __contains__(self, price):
+        """
+        Check if price exists in mbl
+        :param price:
+        :return: exists
+        """
         price = normalize_price(price, self._orderbook.tick_price)
 
         return price in self._level_cache
@@ -302,10 +334,13 @@ class MBL(object):
         :return: price level
         :rtype PriceLevel
         """
-        try:
+
+        price = normalize_price(price, self._orderbook.tick_price)
+
+        if price in self._level_cache:
             return self._level_cache[price]
-        except KeyError:
-            return None
+
+        return None
 
 
 class PriceLevel(object):
@@ -495,7 +530,7 @@ class PriceLevel(object):
 
         idx = self._order_index_map.get(order_id, -1)
 
-        if idx > 0:
+        if idx >= 0:
             order_ref = self.__slice_index(idx)
         else:
             order_ref = None

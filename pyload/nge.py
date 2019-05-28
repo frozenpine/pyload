@@ -12,7 +12,8 @@ from locust.exception import StopLocust
 from bravado.client import ResourceDecorator, CallableOperation
 
 # noinspection PyUnresolvedReferences
-from clients.nge import nge, NGEClientPool, NGEAPIKeyAuthenticator
+from clients.nge import nge, NGEAPIKeyAuthenticator
+from clients.hub import NGEClientPool
 
 
 class LocustWrapper(object):

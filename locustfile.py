@@ -7,8 +7,7 @@ import csv
 import queue
 import sentry_sdk
 
-# noinspection PyUnresolvedReferences
-from gevent.event import Event
+from gevent.threading import Lock
 from random import choice, random
 
 # noinspection PyPackageRequirements,PyUnresolvedReferences
@@ -27,36 +26,11 @@ sentry_sdk.init(integrations=[sentry_logging])
 logging.basicConfig(level=logging.INFO)
 
 
-# hatching_event = Event()
-# hatching_event.clear()
-#
-# stop_event = Event()
-# stop_event.clear()
-#
-#
-# def hatch_complete(**kwargs):
-#     hatching_event.set()
-#
-#
-# def start_hatching(**kwargs):
-#     hatching_event.clear()
-#     stop_event.clear()
-#
-#
-# def stop_hatching(**kwargs):
-#     stop_event.set()
-#
-#
-# events.hatch_complete += hatch_complete
-# events.locust_start_hatching += start_hatching
-# events.locust_stop_hatching += stop_hatching
-
-
 class Order(TaskSet):
-    # noinspection PyMethodMayBeStatic
-    # def on_start(self):
-    #     # hatching_event.wait()
-    #     logging.info("hatch complete.")
+    def __init__(self, parent):
+        super(Order, self).__init__(parent=parent)
+
+        self._lock = Lock()
 
     @task(1000)
     def order_new(self):
@@ -77,7 +51,8 @@ class Order(TaskSet):
             price=order_price, orderQty=order_volume)
 
         if order:
-            self.locust.order_cache[order["orderID"]] = (order, auth)
+            with self._lock:
+                self.locust.order_cache[order["orderID"]] = (order, auth)
 
         self.locust.user_auth_queue.put_nowait(user_data)
 
@@ -85,8 +60,12 @@ class Order(TaskSet):
 
     @task(20)
     def order_cancel(self):
-        for orderID in self.locust.order_cache.copy().keys():
-            order, auth = self.locust.order_cache.pop(orderID, (None, None))
+        with self._lock:
+            origin_cache = self.locust.order_cache
+            self.locust.order_cache = dict()
+
+        for orderID in origin_cache.keys():
+            order, auth = origin_cache.pop(orderID, (None, None))
 
             if not order or not auth:
                 continue
@@ -101,11 +80,13 @@ class Order(TaskSet):
 
             self.client.authenticator = origin_auth
 
+        del origin_cache
+
     @task(1)
     def order_cancel_all(self):
-        origin_cache = self.locust.order_cache
-
-        self.locust.order_cache = dict()
+        with self._lock:
+            origin_cache = self.locust.order_cache
+            self.locust.order_cache = dict()
 
         for user_data in self.locust.user_auth_list:
             self.client.change_auth(**user_data)

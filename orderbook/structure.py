@@ -20,16 +20,17 @@ class DataModel(object):
             raise AttributeError("columns[{}] is required.".format(
                 ",".join(missing_columns)))
 
-        for col, default in self.__slots__.items():
-            if col not in kwargs:
-                setattr(self, col, default)
-                continue
+        for key, value in kwargs.items():
+            if key in self._column_mapper_:
+                value = self._column_mapper_[key](value)
 
-            value = kwargs[col]
-            if col in self._column_mapper_:
-                value = self._column_mapper_[col](value)
+            setattr(self, key, value)
 
-            setattr(self, col, value)
+    def __getattr__(self, item):
+        if item not in self.__slots__:
+            raise AttributeError("invalid attribute name: {}".format(item))
+
+        return self.__slots__[item]
 
     def __getitem__(self, item):
         try:
@@ -57,7 +58,8 @@ class Order(DataModel):
                  "workingIndicator": False, "ordRejReason": "",
                  "simpleLeavesQty": 0.0, "leavesQty": 0, "simpleCumQty": 0.0,
                  "cumQty": 0, "avgPx": 0.0, "multiLegReportingType": "",
-                 "text": "", "transactTime": None, "timestamp": datetime.now()}
+                 "text": "", "transactTime": None, "timestamp": None,
+                 "__weakref__": None}
 
     _required_columns_ = {"orderID"}
 
@@ -73,18 +75,62 @@ class Order(DataModel):
     def __init__(self, **kwargs):
         super(Order, self).__init__(**kwargs)
 
+        if "orderQty" in kwargs:
+            qty = kwargs["orderQty"]
+
+            if "side" in kwargs:
+                if (qty > 0) ^ (self["side"].value > 0):
+                    raise ValueError(
+                        "order quantity[{}] mis-match with order side[{}]"
+                        .format(qty, kwargs["side"]))
+            else:
+                setattr(self, "side",
+                        Direction(qty / abs(qty)))
+
+            setattr(self, "orderQty", abs(qty))
+
         if "leavesQty" not in kwargs:
             setattr(self, "leavesQty", self["orderQty"])
 
     def __eq__(self, other):
-        return self["orderID"] == other["orderID"]
+        """
+        Compare two order, if orderID and timestamp is same,
+        two order is equal.
+        :param other:
+        :return:
+        """
+        return (self["orderID"] == other["orderID"] and
+                self["timestamp"] == other["timestamp"])
+
+    def __lt__(self, other):
+        """
+        Compare one order to another
+        if order id is same, then timestamp is compare condition
+        if order is is different, order's worth(price * leavesQty) is compare
+        condition
+        :param other: another order
+        :return: bool
+        """
+        if hash(self) != hash(other):
+            return (self["price"] * self["leavesQty"] <
+                    other["price"] * other["leavesQty"])
+
+        return self["timestamp"] < other["timestamp"]
+
+    def __hash__(self):
+        """
+        Order id used as hash object
+        :return:
+        """
+        return hash(self["orderID"])
 
 
 class Trade(DataModel):
     __slots__ = {"timestamp": datetime.now(), "symbol": "",
-                 "side": Direction.Buy, "size": 0, "price": 0.0,
-                 "tickDirection": Direction.Sell, "trdMatchID": "",
-                 "grossValue": 0, "homeNotional": 0.0, "foreignNotional": 0.0}
+                 "side": None, "size": 0, "price": 0.0,
+                 "tickDirection": None, "trdMatchID": "", "grossValue": 0,
+                 "homeNotional": 0.0, "foreignNotional": 0.0,
+                 "__weakref__": None}
 
     _column_mapper_ = {
         "timestamp": make_datetime,
@@ -93,7 +139,3 @@ class Trade(DataModel):
     }
 
     _required_columns_ = {"symbol", "timestamp"}
-
-    def __eq__(self, other):
-        return (self["trdMatchID"] == other["trdMatchID"] and
-                self["side"] == other["side"])

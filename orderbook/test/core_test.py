@@ -79,9 +79,7 @@ class PriceLevelTest(unittest.TestCase):
 
         self.level.push_order(order1)
 
-        with self.assertRaisesRegex(ValueError,
-                                    r"not exists under current level"):
-            self.level.remove_order(order2)
+        self.assertEqual(-1, self.level.remove_order(order2))
 
         self.level.push_order(order2)
 
@@ -90,10 +88,10 @@ class PriceLevelTest(unittest.TestCase):
         self.assertEqual(order2, self.level[0])
 
     def test_trade(self):
-        order1 = Order(orderID="123", price=self._LEVEL_PRICE, size=1)
-        order2 = Order(orderID="456", price=self._LEVEL_PRICE, size=2)
-        order3 = Order(orderID="foo", price=self._LEVEL_PRICE, size=3)
-        order4 = Order(orderID="bar", price=self._LEVEL_PRICE, size=4)
+        order1 = Order(orderID="123", price=self._LEVEL_PRICE, orderQty=1)
+        order2 = Order(orderID="456", price=self._LEVEL_PRICE, orderQty=2)
+        order3 = Order(orderID="foo", price=self._LEVEL_PRICE, orderQty=3)
+        order4 = Order(orderID="bar", price=self._LEVEL_PRICE, orderQty=4)
 
         self.level.push_order(order1)
         self.level.push_order(order2)
@@ -108,13 +106,13 @@ class PriceLevelTest(unittest.TestCase):
 
         remained, orders = self.level.trade_volume(4)
         self.assertEqual(0, remained)
-        self.assertEqual([order3], [r() for r in orders])
+        self.assertEqual([order3], [ref() for ref in orders])
         self.assertEqual(order4, self.level[0])
-        self.assertEqual(3, self.level[0]["size"])
+        self.assertEqual(3, self.level[0]["leavesQty"])
 
         remained, orders = self.level.trade_volume(5)
         self.assertEqual(2, remained)
-        self.assertEqual([order4], [r() for r in orders])
+        self.assertEqual([order4], [ref() for ref in orders])
 
         self.assertFalse(self._LEVEL_PRICE in self.mbl)
 
@@ -201,3 +199,11 @@ class MBLTest(unittest.TestCase):
 
         self.assertEqual(5, self.buy.best_price)
         self.assertEqual(5, self.buy.best_level.level_price)
+
+        for i in range(1, 6, 1):
+            order = Order(orderID=str(i), price=i, side="Sell")
+
+            self.sell.add_order(order)
+
+        self.assertEqual(1, self.sell.best_price)
+        self.assertEqual(1, self.sell.best_level.level_price)

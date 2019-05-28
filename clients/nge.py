@@ -11,11 +11,7 @@ from collections import OrderedDict
 from itertools import product
 from datetime import datetime
 
-from gevent.threading import Lock
-from gevent.lock import BoundedSemaphore
-
-from bravado.client import SwaggerClient, ResourceDecorator, CallableOperation
-from bravado.http_future import HttpFuture
+from bravado.client import SwaggerClient
 from bravado.requests_client import RequestsClient
 from bravado_core.formatter import SwaggerFormat
 from bravado_core.exception import SwaggerValidationError
@@ -80,23 +76,6 @@ def guid_deserializer(guid_string):
         return guid_string
 
 
-GUID_FORMATTER = SwaggerFormat(
-    format="guid",
-    to_wire=lambda guid_obj: str(guid_obj),
-    to_python=guid_deserializer,
-    description="GUID to uuid",
-    validate=guid_validate
-)
-
-DATETIME_FORMATTER = SwaggerFormat(
-    format="date-time",
-    to_wire=datetime_serializer,
-    to_python=datetime_deserializer,
-    description="date-time",
-    validate=datetime_validate
-)
-
-
 def nge(host="http://trade", config=None, api_key=None, api_secret=None):
     """
 
@@ -116,7 +95,19 @@ def nge(host="http://trade", config=None, api_key=None, api_secret=None):
             # Returns response in 2-tuple of (body, response);
             # if False, will only return body
             'also_return_response': True,
-            'formats': [GUID_FORMATTER, DATETIME_FORMATTER]
+            'formats': [SwaggerFormat(
+                            format="guid",
+                            to_wire=lambda guid_obj: str(guid_obj),
+                            to_python=guid_deserializer,
+                            description="GUID to uuid",
+                            validate=guid_validate),
+                        SwaggerFormat(
+                            format="date-time",
+                            to_wire=datetime_serializer,
+                            to_python=datetime_deserializer,
+                            description="date-time",
+                            validate=datetime_validate
+                        )]
         }
 
     spec_dir = path("@/swagger")
@@ -157,120 +148,3 @@ def nge(host="http://trade", config=None, api_key=None, api_secret=None):
     else:
         return SwaggerClient.from_spec(
             spec_dict, origin_url=host, config=config)
-
-
-class NGEClientPool(object):
-    class OperationWrapper(object):
-        def __init__(self, origin_attr, semaphore):
-            self._origin_attr = origin_attr
-            self._semaphore = semaphore
-
-        def __call__(self, *args, **kwargs):
-            origin_result = self._origin_attr(*args, **kwargs)
-
-            if isinstance(origin_result, HttpFuture):
-                return NGEClientPool.OperationWrapper(
-                    origin_result, self._semaphore)
-
-            return origin_result
-
-        def __getattr__(self, item):
-            origin_attr = getattr(self._origin_attr, item)
-
-            def wrapper(*args, **kwargs):
-                try:
-                    return origin_attr(*args, **kwargs)
-                finally:
-                    self._semaphore.release()
-
-            if callable(origin_attr):
-                return wrapper
-
-            return origin_attr
-
-    class ResourceWrapper(object):
-        def __init__(self, origin_attr, semaphore):
-            self._origin_attr = origin_attr
-            self._semaphore = semaphore
-
-        def __getattr__(self, item):
-            origin_attr = getattr(self._origin_attr, item)
-
-            if isinstance(origin_attr, ResourceDecorator):
-                return NGEClientPool.ResourceWrapper(origin_attr,
-                                                     self._semaphore)
-
-            if isinstance(origin_attr, CallableOperation):
-                return NGEClientPool.OperationWrapper(origin_attr,
-                                                      self._semaphore)
-
-            return origin_attr
-
-    def __init__(self, host="http://trade", config=None, size=200):
-        if not config:
-            # See full config options at
-            # http://bravado.readthedocs.io/en/latest/configuration.html
-            config = {
-                # Don't use models (Python classes) instead of dicts for
-                # #/definitions/{models}
-                'use_models': False,
-                'validate_requests': True,
-                # bravado has some issues with nullable fields
-                'validate_responses': False,
-                'include_missing_properties': False,
-                # Returns response in 2-tuple of (body, response);
-                # if False, will only return body
-                'also_return_response': True,
-                'formats': [GUID_FORMATTER, DATETIME_FORMATTER]
-            }
-
-        self._pool_size = size
-
-        self._instance_list = list()
-
-        ins = nge(host=host, config=config)
-
-        self._instance_list.append(ins)
-
-        for _ in range(self._pool_size-1):
-            new_instance = SwaggerClient(
-                swagger_spec=ins.swagger_spec,
-                also_return_response=config.get("also_return_response"))
-            self._instance_list.append(new_instance)
-
-        self._semaphore = BoundedSemaphore(self._pool_size)
-
-        self._lock = Lock()
-
-        self._idx = 0
-
-    def _next_instance(self):
-        with self._lock:
-            ins = self._instance_list[self._idx % self._pool_size]
-
-            self._idx += 1
-
-            return ins
-
-    def __getattr__(self, item):
-        self._semaphore.acquire()
-
-        origin_attr = getattr(self._next_instance(), item)
-
-        if not origin_attr or not isinstance(origin_attr,
-                                             ResourceDecorator):
-            return origin_attr
-
-        return NGEClientPool.ResourceWrapper(origin_attr, self._semaphore)
-
-
-class NGEWebsocket(object):
-    def __init__(self, host="http://trade", symbol="XBTUSD",
-                 api_key=None, api_secret=None):
-        self._host = host
-        self._symbol_list = [symbol]
-
-        self._api_key = api_key
-        self._api_secret = api_secret
-
-        self._order_book = None
