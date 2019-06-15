@@ -4,11 +4,11 @@ import os
 import threading
 import csv
 import sys
-import signal
 import pprint
 
 from time import sleep
 from queue import Queue
+from random import shuffle, random
 
 from bitmex import bitmex
 from bitmex_websocket import BitMEXWebsocket
@@ -19,7 +19,7 @@ from clients.nge import nge, NGEAPIKeyAuthenticator
 from common.utils import path
 
 
-HOST = ("3.112.97.161", 80)
+HOST = ("18.179.50.234", 80)
 
 SYMBOL = "XBTUSD"
 
@@ -27,11 +27,11 @@ ORDERBOOK_DEPTH = 50
 
 SIZE_SCALE = 0.01
 
-LOOP_DELAY = 5
+LOOP_DELAY = 1
 
 AUTH_TOTAL = 50
 
-USE_PROXY = False
+USE_PROXY = True
 PROXY = "http://127.0.0.1:1080"
 
 logging.basicConfig(level=logging.INFO)
@@ -77,7 +77,7 @@ def init_auth(user_file, count=None):
 
             user_count += 1
 
-            if count and 0 < count < user_count:
+            if count and 0 < count <= user_count:
                 break
 
             auth = NGEAPIKeyAuthenticator(host=host_url(host=HOST),
@@ -303,7 +303,10 @@ def orderbook_follower(client, symbol, mbl, ws):
         [price for price in mbl["Buy"].keys() if
          is_trim_price["Buy"](price, buy)])
 
+    shuffle(sell)
     modify_or_make_new(client, symbol, mbl, "Sell", sell)
+
+    shuffle(buy)
     modify_or_make_new(client, symbol, mbl, "Buy", buy)
 
 
@@ -377,7 +380,7 @@ def market_maker(flags, symbol, client, mbl):
             trade_follower(client=client, symbol=symbol, mbl=mbl, ws=ws,
                            last_trade=last_trade)
 
-            sleep(LOOP_DELAY)
+            sleep(LOOP_DELAY + random())
 
             flags[1].wait()
     finally:
@@ -433,13 +436,6 @@ if __name__ == "__main__":
         cancel_all(client_instance)
 
         exit()
-
-    signal.signal(signal.SIGABRT, exit_func)
-    signal.signal(signal.SIGTERM, exit_func)
-    signal.signal(signal.SIGUSR1, lambda x, y: cancel_all(client_instance))
-    signal.signal(signal.SIGHUP,
-                  lambda x, y: pause_flag.clear() if pause_flag.is_set()
-                  else pause_flag.set())
 
     mbl_local = {
         "Buy": dict(),
