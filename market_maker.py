@@ -10,6 +10,8 @@ from time import sleep
 from queue import Queue
 from random import shuffle, random
 
+from concurrent.futures import ThreadPoolExecutor, wait
+
 from bitmex import bitmex
 from bitmex_websocket import BitMEXWebsocket
 from bravado.exception import HTTPBadRequest, HTTPUnauthorized
@@ -266,7 +268,7 @@ def wait_for_data(running, ws):
         sleep(1)
 
 
-def orderbook_follower(client, symbol, mbl, ws):
+def orderbook_follower(client, symbol, mbl, ws, executor=None):
     is_trim_price = {
         "Sell": lambda p, p_list: p > p_list[-1]["price"] or
         p < p_list[0]["price"],
@@ -304,10 +306,21 @@ def orderbook_follower(client, symbol, mbl, ws):
          is_trim_price["Buy"](price, buy)])
 
     shuffle(sell)
-    modify_or_make_new(client, symbol, mbl, "Sell", sell)
-
     shuffle(buy)
-    modify_or_make_new(client, symbol, mbl, "Buy", buy)
+
+    if not executor:
+        modify_or_make_new(client, symbol, mbl, "Sell", sell)
+
+        modify_or_make_new(client, symbol, mbl, "Buy", buy)
+
+        return
+
+    future1 = executor.submit(modify_or_make_new,
+                              (client, symbol, mbl, "Sell", sell))
+    future2 = executor.submit(modify_or_make_new,
+                              (client, symbol, mbl, "Buy", buy))
+
+    wait(fs=(future1, future2), timeout=None)
 
 
 def trade_follower(client, symbol, mbl, ws, last_trade):
@@ -369,13 +382,16 @@ def market_maker(flags, symbol, client, mbl):
     count = 0
 
     try:
+        executor = ThreadPoolExecutor(4)
+
         while ws.ws.sock.connected and flags[0].is_set():
             if count % 10 == 9:
                 sync_orders(client=client, symbol=symbol, mbl=mbl)
 
             count += 1
 
-            orderbook_follower(client=client, symbol=symbol, mbl=mbl, ws=ws)
+            orderbook_follower(client=client, symbol=symbol, mbl=mbl, ws=ws,
+                               executor=executor)
 
             trade_follower(client=client, symbol=symbol, mbl=mbl, ws=ws,
                            last_trade=last_trade)
