@@ -206,7 +206,7 @@ def trim_orders(client, mbl, side, prices):
 
         client.swagger_spec.http_client.authenticator = origin_auth
 
-        client.Order.Order_cancel(orderID=order["orderID"])
+        client.Order.Order_cancel(orderID=order["orderID"]).result()
 
 
 def modify_or_make_new(client, symbol, mbl, side, market_data):
