@@ -399,6 +399,8 @@ def market_maker(flags, symbol, client, mbl):
             sleep(LOOP_DELAY + random())
 
             flags[1].wait()
+    except Exception:
+        pass
     finally:
         os.environ.pop("https_proxy", None)
 
