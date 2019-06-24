@@ -1,4 +1,4 @@
-# coding: utf-9
+# coding: utf-8
 
 from bravado.client import SwaggerClient, ResourceDecorator, CallableOperation
 from bravado.http_future import HttpFuture
