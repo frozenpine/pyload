@@ -11,6 +11,7 @@ from queue import Queue
 from random import shuffle, random
 from concurrent.futures import ThreadPoolExecutor, wait
 from bravado.client import SwaggerClient
+from bravado.exception import HTTPNotFound
 
 from bitmex import bitmex
 from bitmex_websocket import BitMEXWebsocket
@@ -21,7 +22,7 @@ from clients.nge import nge, NGEAPIKeyAuthenticator
 from common.utils import path
 
 
-HOST = ("18.179.50.234", 80)
+HOST = ("localhost", 80)
 
 SYMBOL = "XBTUSD"
 
@@ -34,7 +35,7 @@ LOOP_DELAY = 1
 AUTH_TOTAL = 50
 
 USE_PROXY = True
-PROXY = "http://127.0.0.1:1080"
+PROXY = "http://127.0.0.1:7890"
 
 logging.basicConfig(level=logging.INFO)
 
@@ -206,7 +207,10 @@ def trim_orders(client, mbl, side, prices):
 
         client.swagger_spec.http_client.authenticator = origin_auth
 
-        client.Order.Order_cancel(orderID=order["orderID"]).result()
+        try:
+            client.Order.Order_cancel(orderID=order["orderID"]).result()
+        except HTTPNotFound:
+            pass
 
 
 def modify_or_make_new(client, symbol, mbl, side, market_data):
@@ -241,6 +245,8 @@ def modify_or_make_new(client, symbol, mbl, side, market_data):
             try:
                 new_client.Order.Order_cancel(
                     orderID=origin_order["orderID"]).result()
+            except HTTPNotFound:
+                pass
             except (SwaggerError, HTTPBadRequest) as e:
                 handle_exception(e)
             finally:
@@ -320,11 +326,11 @@ def orderbook_follower(client, symbol, mbl, ws, executor=None):
         return
 
     future1 = executor.submit(modify_or_make_new,
-                              (client, symbol, mbl, "Sell", sell))
+                              client, symbol, mbl, "Sell", sell)
     future2 = executor.submit(modify_or_make_new,
-                              (client, symbol, mbl, "Buy", buy))
+                              client, symbol, mbl, "Buy", buy)
 
-    wait(fs=(future1, future2), timeout=None)
+    wait((future1, future2))
 
 
 def trade_follower(client, symbol, mbl, ws, last_trade):
@@ -383,16 +389,16 @@ def market_maker(flags, symbol, client, mbl):
 
     last_trade = dict()
 
-    count = 0
+    # count = 0
 
     try:
         executor = ThreadPoolExecutor(4)
 
         while ws.ws.sock.connected and flags[0].is_set():
-            if count % 10 == 9:
-                sync_orders(client=client, symbol=symbol, mbl=mbl)
-
-            count += 1
+            # if count % 10 == 9:
+            #     sync_orders(client=client, symbol=symbol, mbl=mbl)
+            #
+            # count += 1
 
             orderbook_follower(client=client, symbol=symbol, mbl=mbl, ws=ws,
                                executor=executor)
@@ -403,7 +409,7 @@ def market_maker(flags, symbol, client, mbl):
             sleep(LOOP_DELAY + random())
 
             flags[1].wait()
-    except Exception:
+    except AttributeError:
         pass
     finally:
         os.environ.pop("https_proxy", None)
