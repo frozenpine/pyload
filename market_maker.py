@@ -9,8 +9,8 @@ import pprint
 from time import sleep
 from queue import Queue
 from random import shuffle, random
-
 from concurrent.futures import ThreadPoolExecutor, wait
+from bravado.client import SwaggerClient
 
 from bitmex import bitmex
 from bitmex_websocket import BitMEXWebsocket
@@ -210,6 +210,10 @@ def trim_orders(client, mbl, side, prices):
 
 
 def modify_or_make_new(client, symbol, mbl, side, market_data):
+    new_client = SwaggerClient(
+        swagger_spec=client.swagger_spec,
+        also_return_response=True)
+
     for market in market_data:
         origin_order, origin_auth = mbl[side].pop(
             market["price"], (None, None))
@@ -217,12 +221,12 @@ def modify_or_make_new(client, symbol, mbl, side, market_data):
         if not origin_order:
             new_auth = AUTH_QUEUE.get()
 
-            client.swagger_spec.http_client.authenticator = new_auth
+            new_client.swagger_spec.http_client.authenticator = new_auth
 
             AUTH_QUEUE.put_nowait(new_auth)
 
             if market["size"] != 0:
-                new_order, _ = client.Order.Order_new(
+                new_order, _ = new_client.Order.Order_new(
                     symbol=symbol, side=side,
                     orderQty=scale_size(market["size"]),
                     price=market["price"]).result()
@@ -231,11 +235,11 @@ def modify_or_make_new(client, symbol, mbl, side, market_data):
 
             continue
 
-        client.swagger_spec.http_client.authenticator = origin_auth
+        new_client.swagger_spec.http_client.authenticator = origin_auth
 
         if market["size"] == 0:
             try:
-                client.Order.Order_cancel(
+                new_client.Order.Order_cancel(
                     orderID=origin_order["orderID"]).result()
             except (SwaggerError, HTTPBadRequest) as e:
                 handle_exception(e)
@@ -246,7 +250,7 @@ def modify_or_make_new(client, symbol, mbl, side, market_data):
 
         if market["size"] != origin_order["orderQty"]:
             try:
-                client.Order.Order_amend(
+                new_client.Order.Order_amend(
                     orderID=origin_order["orderID"],
                     orderQty=scale_size(market["size"])).result()
             except (SwaggerError, HTTPBadRequest) as e:
