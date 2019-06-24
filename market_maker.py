@@ -12,6 +12,7 @@ from random import shuffle, random
 from concurrent.futures import ThreadPoolExecutor, wait
 from bravado.client import SwaggerClient
 from bravado.exception import HTTPNotFound
+from websocket import WebSocketTimeoutException
 
 from bitmex import bitmex
 from bitmex_websocket import BitMEXWebsocket
@@ -426,11 +427,13 @@ def main(flags, client, symbol, mbl):
     make_mbl(client=client, symbol=symbol, mbl=mbl, side="Buy", orders=buy)
 
     while flags[0].is_set():
-        market_maker(flags=flags, symbol=symbol, client=client, mbl=mbl)
-
-        logging.warning(
-            "websocket disconnected, wait {} seconds to reconnect.".format(
-                LOOP_DELAY))
+        try:
+            market_maker(flags=flags, symbol=symbol, client=client, mbl=mbl)
+        except WebSocketTimeoutException as e:
+            logging.warning(e)
+        else:
+            logging.warning("websocket disconnected, "
+                            "wait {} seconds to reconnect.".format(LOOP_DELAY))
 
         sleep(LOOP_DELAY)
 
