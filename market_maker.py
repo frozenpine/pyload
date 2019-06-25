@@ -171,6 +171,8 @@ def make_mbl(client, symbol, mbl, side, orders):
                         orderQty=scale_size(order["size"])).result()
                 except (SwaggerError, HTTPBadRequest) as e:
                     handle_exception(e)
+
+                    # 改单错误，此处认为对应OrderID的委托不存在
                     mbl[side].pop(order["price"], None)
                 else:
                     exist_order["orderQty"] = order["size"]
@@ -262,6 +264,8 @@ def modify_or_make_new(client, symbol, mbl, side, market_data):
                     orderQty=scale_size(market["size"])).result()
             except (SwaggerError, HTTPBadRequest) as e:
                 handle_exception(e)
+
+                # 改单错误，此处认为对应OrderID的委托不存在
                 mbl[side].pop(origin_order["price"], None)
 
                 continue
@@ -280,6 +284,7 @@ def wait_for_data(running, ws):
 
 
 def orderbook_follower(client, symbol, mbl, ws, executor=None):
+    # 与Bitmex比较，判断本地Orderbook中需要撤单的价格Level
     is_trim_price = {
         "Sell": lambda p, p_list: p > p_list[-1]["price"] or
         p < p_list[0]["price"],
@@ -357,7 +362,19 @@ def trade_follower(client, symbol, mbl, ws, last_trade):
     side = last_trade["side"]
     order_qty = scale_size(last_trade["size"])
 
-    if price in mbl[side_switch[side]]:
+    flap_side = side_switch[side]
+
+    if price in mbl[flap_side]:
+        # 过滤对手方的重叠价格level
+        overlap_prices = {
+            "Buy": lambda p, p_list: [price for price in p_list if price > p],
+            "Sell": lambda p, p_list: [price for price in p_list if price < p]
+        }
+        # 撤销对手单中价格优于最新成交价的委托
+        trim_orders(client=client, mbl=mbl, side=flap_side,
+                    prices=overlap_prices[flap_side](price,
+                                                     mbl[flap_side].keys()))
+
         client.swagger_spec.http_client.authenticator = new_auth
 
         client.Order.Order_new(
