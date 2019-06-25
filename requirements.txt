@@ -1,3 +1,4 @@
+arrow==0.14.2
 asn1crypto==0.24.0
 bitmex==0.2.2
 bitmex-ws==0.3.1
