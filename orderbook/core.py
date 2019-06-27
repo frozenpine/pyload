@@ -4,9 +4,11 @@ __all__ = ("OrderBook", "MBL", "PriceLevel", "PriceHeap")
 import heapq
 import sys
 
+from os.path import sep
+
 from typing import List, Dict, Optional
-from collections import defaultdict
-from functools import reduce
+from collections import defaultdict, OrderedDict
+from functools import reduce, wraps
 from weakref import ref, ReferenceType
 
 from orderbook import logger
@@ -63,10 +65,13 @@ class PriceHeap(object):
 
         heapq.heapify(self._heap)
 
-    def top(self, n=25) -> List[float]:
+    def top(self, n: int = 25) -> List[float]:
         n = min(n, len(self._heap))
 
         return [p * self._direction for p in heapq.nsmallest(n, self._heap)]
+
+    def top_price(self, price: float):
+        pass
 
     def __getitem__(self, item):
         return self._heap[item] * self._direction
@@ -209,6 +214,10 @@ class MBL(object):
         return self._orderbook[self._direction.flap()]
 
     @property
+    def direction(self) -> Direction:
+        return self._direction
+
+    @property
     def best_price(self) -> float:
         """
         Get best level's price
@@ -257,6 +266,13 @@ class MBL(object):
             raise ValueError("level with price[{}] already exists.".format(
                 level.level_price))
 
+        if level.mbl:
+            if level.mbl is not self:
+                raise ValueError(
+                    "level is already append to another mbl.")
+        else:
+            level.mbl = self
+
         self._level_cache[level.level_price] = level
         self._price_heap.push(level.level_price)
 
@@ -264,12 +280,12 @@ class MBL(object):
         """
         Delete a price level by price
         :param price: level price
-        :return:
+        :return: price level
         :rtype Optional(PriceLevel)
         """
 
         if price not in self._level_cache:
-            return
+            return None
 
         level = self._level_cache.pop(price)
 
@@ -343,70 +359,68 @@ class MBL(object):
         return None
 
 
+def _price_level_depth_checker(func):
+    @wraps(func)
+    def depth_checker(self, *args, **kwargs):
+        result = func(self, *args, **kwargs)
+
+        if self.count <= 0 and self._mbl:
+            self._mbl.delete_level(self.level_price)
+
+        return result
+
+    return depth_checker
+
+
 class PriceLevel(object):
-    """
-    This is a FIFO order queue presents a price level in MBL
-    """
-    def __init__(self, price: float, mbl: MBL):
+    def __init__(self, price: float = 0.0, mbl: MBL = None):
         self._price = price
         self._mbl = mbl
 
-        self._order_list = list()
-
-        self._order_index_map = dict()
+        self._order_cache = OrderedDict()
 
         self.__add_to_mbl()
 
     @property
-    def level_price(self) -> float:
-        """
-        Current level's price
-        :return: level price
-        """
-
+    def level_price(self):
         return self._price
 
     @property
-    def count(self) -> int:
-        """
-        Order count of current price level
-        :return: order count
-        """
-
-        if not self.__check_depth():
-            return 0
-
-        return len(self._order_list)
+    def count(self):
+        return len(self._order_cache)
 
     @property
-    def size(self) -> int:
-        if not self.__check_depth():
+    def size(self):
+        if not self._order_cache:
             return 0
 
-        if self.count == 1:
-            return self._order_list[0].orderQty
+        return reduce(lambda x, y: x + y,
+                      [o.orderQty for o in self._order_cache.values()],
+                      0)
 
-        result = reduce(lambda x, y: x.orderQty + y.orderQty, self._order_list)
+    @property
+    def mbl(self):
+        return self._mbl
 
-        return result
+    @mbl.setter
+    def mbl(self, mbl: MBL):
+        caller = getattr(sys, '_getframe')()
+        while caller.f_code.co_name != "mbl":
+            caller = caller.f_code.f_back
+
+        caller = caller.f_back
+
+        if (caller.f_code.co_name != "append_level" or
+                not caller.f_code.co_filename.endswith(
+                    sep.join(("orderbook", "core.py")))):
+            raise RuntimeError(
+                "mbl setter can only be called by MBL.append_level.")
+
+        self._mbl = mbl
 
     def __add_to_mbl(self):
-        if self._price and self._price not in self._mbl:
+        if self._price and self._mbl and self._price not in self._mbl:
             self._mbl.append_level(self)
-
-    def __check_depth(self) -> bool:
-        assert len(self._order_list) == len(self._order_index_map), \
-            ("order list size mis-match with order index map "
-             "in current level[{}].\n"
-             "order list: {}\norder index map:{}").format(
-                self._price, self._order_list, self._order_index_map)
-
-        if len(self._order_list) > 0:
-            return True
-
-        self._mbl.delete_level(self.level_price)
-
-        return False
 
     def __verify_order_price(self, order):
         if not self._price:
@@ -421,37 +435,6 @@ class PriceLevel(object):
                 "order[{}]'s price[{}] mis-match with current level[{}]"
                 .format(order["orderID"], order["price"], self._price))
 
-    def __renew_order_index_map(self, start_index, reduce_idx):
-        for order in self._order_list[start_index:]:
-            self._order_index_map[order.orderID] -= reduce_idx
-
-    def __slice_index(self, idx) -> ReferenceType:
-        order = self._order_list.pop(idx)
-
-        self._order_index_map.pop(order.orderID)
-
-        self.__renew_order_index_map(idx, 1)
-
-        self.__check_depth()
-
-        return ref(order)
-
-    def __slice_left(self, index, keep_index=False) -> List[ReferenceType]:
-        if not keep_index:
-            index += 1
-
-        sliced_orders = self._order_list[:index]
-        self._order_list = self._order_list[index:]
-
-        for order in sliced_orders:
-            self._order_index_map.pop(order.orderID)
-
-        self.__renew_order_index_map(0, index)
-
-        self.__check_depth()
-
-        return [ref(o) for o in sliced_orders]
-
     def push_order(self, order: Order) -> int:
         """
         Append order to current price level
@@ -462,43 +445,32 @@ class PriceLevel(object):
 
         self.__verify_order_price(order)
 
-        if order["orderID"] in self._order_index_map:
+        if order["orderID"] in self._order_cache:
             raise ValueError(
                 "order[{}] exists in current level[{}]\n"
                 "origin order: {}\nnew order: {}".format(
                     order["orderID"], self.level_price,
-                    self._order_list[self._order_index_map[order["orderID"]]],
-                    order))
+                    self._order_cache[order["orderID"]], order))
 
-        self._order_list.append(order)
-        self._order_index_map[order["orderID"]] = len(self._order_list) - 1
+        self._order_cache[order["orderID"]] = order
 
-        return self._order_index_map[order["orderID"]]
+        return self.count - 1
 
-    def modify_order(self, order: Order) -> int:
+    def modify_order(self, order: Order):
         """
         Modify order under current price level
         :param order: Order
         :return:
         :raises ValueError, RuntimeError
         """
-        if not self.__check_depth():
-            return -1
 
-        self.__verify_order_price(order)
-
-        try:
-            idx = self._order_index_map[order["orderID"]]
-        except KeyError:
+        if order["orderID"] not in self._order_cache:
             raise ValueError(
-                "order[{}] not exists under current level[{}]".format(
-                    order["orderID"], self._price))
+                "order[{}] not exists.".format(order["orderID"]))
 
-        self._order_list[idx] = order
+        self._order_cache[order["orderID"]] = order
 
-        return idx
-
-    def remove_order(self, order: Order) -> int:
+    def remove_order(self, order: Order):
         """
         Remove a order from current level
         if order's price mis-match with current level,
@@ -508,13 +480,10 @@ class PriceLevel(object):
         :raise ValueError
         """
 
-        self.__verify_order_price(order)
+        return self.remove_order_by_id(order["orderID"])
 
-        idx, _ = self.remove_order_by_id(order["orderID"])
-
-        return idx
-
-    def remove_order_by_id(self, order_id: str) -> (int, ReferenceType):
+    @_price_level_depth_checker
+    def remove_order_by_id(self, order_id: str):
         """
         Remove a order by its orderID
         if order id not exist, (-1, None) will return
@@ -522,21 +491,14 @@ class PriceLevel(object):
         :return: order index, removed order's weak ref
         """
 
-        if not self.__check_depth():
-            return -1, None
+        if order_id not in self._order_cache:
+            raise ValueError(
+                "order[{}] not exists in current level[{}]".format(
+                    order_id, self.level_price))
 
-        if order_id not in self._order_index_map:
-            return -1, None
+        return self._order_cache.pop(order_id)
 
-        idx = self._order_index_map.get(order_id, -1)
-
-        if idx >= 0:
-            order_ref = self.__slice_index(idx)
-        else:
-            order_ref = None
-
-        return idx, order_ref
-
+    @_price_level_depth_checker
     def trade_volume(self, volume: int) -> (int, List[ReferenceType]):
         """
         Trade specified volume size
@@ -545,33 +507,30 @@ class PriceLevel(object):
         """
         remained_volume = volume
 
-        idx = 0
+        traded_orders = list()
 
-        for order in self._order_list:
-            remained_volume -= order["leavesQty"]
+        for order_id in list(self._order_cache.keys()):
+            remained_volume -= self._order_cache[order_id]["leavesQty"]
+
+            order = self._order_cache[order_id]
+            traded_orders.append(ref(order))
+
+            if remained_volume >= 0:
+                self._order_cache.pop(order_id)
 
             if remained_volume <= 0:
+                order["leavesQty"] = abs(remained_volume)
                 break
-
-            idx += 1
-
-        traded_orders = self.__slice_left(index=idx,
-                                          keep_index=remained_volume < 0)
-        if remained_volume < 0:
-            self._order_list[0]["leavesQty"] = abs(remained_volume)
+            else:
+                order["leavesQty"] = 0
 
         return max(0, remained_volume), traded_orders
 
-    def __getitem__(self, idx) -> Order:
-        if not self.__check_depth():
-            raise IndexError(
-                "no order exists on current level[{}]"
-                .format(self._price))
-
+    def __getitem__(self, idx):
         if not isinstance(idx, int):
-            raise ValueError("index type must be integer.")
+            raise ValueError("index type must be integer")
 
-        if idx >= len(self._order_list):
-            raise IndexError("index[{}] out of range.".format(idx))
+        if idx >= self.count:
+            raise IndexError("index[{}] out of range".format(idx))
 
-        return self._order_list[idx]
+        return self._order_cache[list(self._order_cache.keys())[idx]]

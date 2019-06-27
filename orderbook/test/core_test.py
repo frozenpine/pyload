@@ -22,7 +22,7 @@ class PriceLevelTest(unittest.TestCase):
         order2 = Order(orderID="456", price=self._LEVEL_PRICE)
 
         with self.assertRaisesRegex(IndexError,
-                                    r"no order exists on current level"):
+                                    r"index\[.*\] out of range"):
             _ = self.level[0]
 
         self.level.push_order(order1)
@@ -33,6 +33,9 @@ class PriceLevelTest(unittest.TestCase):
 
         self.assertEqual(order1, self.level[0])
         self.assertEqual(order2, self.level[1])
+
+        self.level.remove_order_by_id("123")
+        self.assertEqual(order2, self.level[0])
 
     def test_append(self):
         order1 = Order(orderID="123", price=self._LEVEL_PRICE)
@@ -46,11 +49,14 @@ class PriceLevelTest(unittest.TestCase):
 
         # order price mis-match with level price
         with self.assertRaisesRegex(ValueError,
-                                    r"mis-match with current level"):
+                                    r"order\[.*\]'s price\[.*\] mis-match "
+                                    r"with current level\[.*\]"):
             self.level.push_order(order2)
 
         # order already exist in current level
-        with self.assertRaisesRegex(ValueError, r"exists in current level"):
+        with self.assertRaisesRegex(ValueError,
+                                    r"order\[.*\] exists in "
+                                    r"current level\[.*\]"):
             self.level.push_order(order1)
 
     def test_modify(self):
@@ -68,24 +74,39 @@ class PriceLevelTest(unittest.TestCase):
 
         # order not exist under current level
         with self.assertRaisesRegex(ValueError,
-                                    "not exists under current level"):
+                                    r"order\[.*\] not exists under current "
+                                    r"level\[.*\]"):
             self.level.modify_order(order3)
 
     def test_pop(self):
         order1 = Order(orderID="123", price=self._LEVEL_PRICE)
         order2 = Order(orderID="456", price=self._LEVEL_PRICE)
+        order3 = Order(orderID="789", price=self._LEVEL_PRICE)
+        order4 = Order(orderID="foo", price=self._LEVEL_PRICE)
 
-        self.assertEqual(-1, self.level.remove_order(order1))
+        with self.assertRaisesRegex(ValueError,
+                                    r"order\[.*\] not exists in current "
+                                    r"level\[.*\]"):
+            self.level.remove_order(order1)
 
         self.level.push_order(order1)
 
-        self.assertEqual(-1, self.level.remove_order(order2))
+        with self.assertRaisesRegex(ValueError,
+                                    r"order\[.*\] not exists in current "
+                                    r"level\[.*\]"):
+            self.level.remove_order(order2)
 
         self.level.push_order(order2)
+        self.level.push_order(order3)
+        self.level.push_order(order4)
 
-        self.assertEqual(0, self.level.remove_order(order1))
+        self.assertEqual(order1, self.level.remove_order(order1))
 
         self.assertEqual(order2, self.level[0])
+
+        self.assertEqual(order3, self.level.remove_order_by_id("789"))
+        self.assertEqual(order2, self.level[0])
+        self.assertEqual(order4, self.level[1])
 
     def test_trade(self):
         order1 = Order(orderID="123", price=self._LEVEL_PRICE, orderQty=1)
@@ -106,7 +127,7 @@ class PriceLevelTest(unittest.TestCase):
 
         remained, orders = self.level.trade_volume(4)
         self.assertEqual(0, remained)
-        self.assertEqual([order3], [ref() for ref in orders])
+        self.assertEqual([order3, order4], [ref() for ref in orders])
         self.assertEqual(order4, self.level[0])
         self.assertEqual(3, self.level[0]["leavesQty"])
 
@@ -188,7 +209,7 @@ class MBLTest(unittest.TestCase):
         self.sell = MBL(direction=Direction.Sell, orderbook=self.ob)
         self.buy = MBL(direction=Direction.Buy, orderbook=self.ob)
 
-    def test_best_price(self):
+    def test_create(self):
         self.assertEqual(sys.float_info.max, self.sell.best_price)
         self.assertEqual(0, self.buy.best_price)
 
@@ -199,6 +220,7 @@ class MBLTest(unittest.TestCase):
 
         self.assertEqual(5, self.buy.best_price)
         self.assertEqual(5, self.buy.best_level.level_price)
+        self.assertEqual(5, self.buy.depth)
 
         for i in range(1, 6, 1):
             order = Order(orderID=str(i), price=i, side="Sell")
@@ -207,3 +229,36 @@ class MBLTest(unittest.TestCase):
 
         self.assertEqual(1, self.sell.best_price)
         self.assertEqual(1, self.sell.best_level.level_price)
+
+        self.assertEqual(5, self.sell.depth)
+
+    def test_append_level(self):
+        level1 = PriceLevel(price=0.0, mbl=self.buy)
+
+        with self.assertRaisesRegex(ValueError, r"invalid level price\[.*\]"):
+            self.buy.append_level(level1)
+
+        # if price valid and mbl specified,
+        # price level will add to mbl automatically
+        level2 = PriceLevel(price=1.0, mbl=self.buy)
+
+        self.assertEqual(1, self.buy.depth)
+
+        with self.assertRaisesRegex(ValueError,
+                                    r"level with price\[.*\] already exists."):
+            self.buy.append_level(level2)
+
+        level3 = PriceLevel(price=2.0)
+
+        self.buy.append_level(level3)
+        self.assertEqual(2, self.buy.depth)
+        self.assertEqual(level3.mbl, self.buy)
+
+        with self.assertRaisesRegex(RuntimeError,
+                                    "mbl setter can only be called by "
+                                    "MBL.append_level"):
+            level3.mbl = self.buy
+
+        with self.assertRaisesRegex(ValueError,
+                                    "level is already append to another mbl."):
+            self.sell.append_level(level2)
