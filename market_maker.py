@@ -11,7 +11,7 @@ from queue import Queue
 from random import shuffle, random
 from concurrent.futures import ThreadPoolExecutor, wait
 from bravado.client import SwaggerClient
-from bravado.exception import HTTPNotFound
+from bravado.exception import HTTPNotFound, HTTPBadGateway
 from websocket import WebSocketTimeoutException
 
 from bitmex import bitmex
@@ -81,14 +81,14 @@ def init_auth(user_file, count=None):
 
             user_count += 1
 
-            if count and 0 < count <= user_count:
-                break
-
             auth = NGEAPIKeyAuthenticator(host=host_url(host=HOST),
                                           api_key=user_data["api_key"],
                                           api_secret=user_data["api_secret"])
 
             AUTH_LIST.append(auth)
+
+            if count and user_count >= count:
+                break
 
     logging.info(
         "Total {} user loaded.".format(len(AUTH_LIST)))
@@ -340,11 +340,6 @@ def orderbook_follower(client, symbol, mbl, ws, executor=None):
 
 
 def trade_follower(client, symbol, mbl, ws, last_trade):
-    side_switch = {
-        "Buy": "Sell",
-        "Sell": "Buy"
-    }
-
     latest_trade = ws.data["trade"][-1]
 
     if last_trade and last_trade["timestamp"] == latest_trade["timestamp"]:
@@ -362,7 +357,7 @@ def trade_follower(client, symbol, mbl, ws, last_trade):
     side = last_trade["side"]
     order_qty = scale_size(last_trade["size"])
 
-    flap_side = side_switch[side]
+    flap_side = switch_side(side)
 
     if price in mbl[flap_side]:
         # 过滤对手方的重叠价格level
@@ -385,7 +380,7 @@ def trade_follower(client, symbol, mbl, ws, last_trade):
         return
 
     client.Order.Order_new(
-        symbol=symbol, side=side_switch[side],
+        symbol=symbol, side=switch_side(side),
         orderQty=order_qty, price=price).result()
 
     client.Order.Order_new(
