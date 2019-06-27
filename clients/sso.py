@@ -171,7 +171,11 @@ class User(object):
                 identity, ", ".join(cls._identity_patterns.keys())))
 
     @classmethod
-    def register(cls, identity, password, captcha="", invite=""):
+    def change_host(cls, addr, port=80):
+        cls._host = (addr, port)
+
+    @classmethod
+    def register(cls, identity, password, captcha="", invite="", host=()):
         """
         Register user
         :param identity: User identity: email or mobile
@@ -184,7 +188,10 @@ class User(object):
             "password": cls._rsa_encrypt(password),
             "confirm": "",
             "verifyCode": captcha,
-            "inviteCode": invite
+            "inviteCode": invite,
+            "sessionId": "",
+            "token": "",
+            "sig": ""
         }
 
         failed_message = {
@@ -286,6 +293,27 @@ class User(object):
 
         return self.api_key and self.api_secret
 
+    def deposit(self, amount=18000000000000):
+        if not self.logged:
+            raise RuntimeWarning("please login first.")
+
+        deposit = {
+            "userId": self.user_info["userId"],
+            "address": "2NBMEXVRa4RXoYaeokm7U2Cc6w5dSA4cXSk",
+            "amount": amount,
+            "withdrawFee": 1000,
+            "transactionId": "102101",
+            "transactionType": "1",
+            "transactionStatus": "2",
+            "currency": "XBT"
+        }
+
+        result = self._request(
+            endpoint="depositNotice1",
+            json=deposit)
+
+        return result
+
     def __repr__(self):
         info = OrderedDict()
 
@@ -301,3 +329,16 @@ class User(object):
 
     def __del__(self):
         self._session.close()
+
+
+if __name__ == "__main__":
+    host = ("test.365mex.com", 80)
+
+    User.change_host(*host)
+
+    for id in range(1, 51):
+        user = User.register(identity="user{:02d}@qq.com".format(id),
+                             password="123456")
+
+        print(user)
+        print(user.deposit())
