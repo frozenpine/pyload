@@ -119,8 +119,9 @@ class NGE(NGELocust):
         with open(user_file) as f:
             reader = csv.DictReader(f)
             for user_data in reader:
-                if not (user_data["identity"] and user_data["password"]) or \
-                        not (user_data["api_key"] and user_data["api_secret"]):
+                if (not (user_data["identity"] and user_data["password"])) or (
+                        not (user_data["api_key"] and
+                             user_data["api_secret"])):
                     logging.warning("invalid auth: %s".format(user_data))
                     continue
 
