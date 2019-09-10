@@ -64,7 +64,7 @@ class Order(TaskSet):
             origin_cache = self.locust.order_cache
             self.locust.order_cache = dict()
 
-        for orderID in origin_cache.keys():
+        for orderID in origin_cache.copy().keys():
             order, auth = origin_cache.pop(orderID, (None, None))
 
             if not order or not auth:
@@ -129,11 +129,14 @@ class NGE(NGELocust):
                 self.user_auth_queue.put_nowait(user_data)
 
         self.order_price_list.extend(
-            map(lambda x: 7800 + 0.5 * x, range(1, 51, 1)))
+            map(lambda x: float(os.environ.get("BASE_PRICE", 10000)) + 0.5 * x,
+                range(1, 51, 1)))
 
 
 if __name__ == "__main__":
-    NGE.host = "http://localhost"
+    NGE.host = "http://47.103.74.144"
+
+    os.environ["BASE_PRICE"] = "10230.0"
 
     ins = NGE()
 

@@ -117,9 +117,9 @@ class LazyLoader(object):
         else:
             self._sso_instance = self.User()
 
-        self._client = LocustWrapper(
-            NGEClientPool(host=self._sso_instance.host(), size=10))
-        # self._client = LocustWrapper(nge(host=self._sso_instance.host()))
+        # self._client = LocustWrapper(
+        #     NGEClientPool(host=self._sso_instance.host(), size=10))
+        self._client = LocustWrapper(nge(host=self._sso_instance.host()))
 
     @property
     def logged(self):
