@@ -28,6 +28,7 @@ class NGEClientPool(object):
             origin_attr = getattr(self._origin_attr, item)
 
             def wrapper(*args, **kwargs):
+                self._semaphore.acquire()
                 try:
                     return origin_attr(*args, **kwargs)
                 finally:
@@ -87,7 +88,7 @@ class NGEClientPool(object):
             return ins
 
     def __getattr__(self, item):
-        self._semaphore.acquire()
+        # self._semaphore.acquire()
 
         origin_attr = getattr(self._next_instance(), item)
 
