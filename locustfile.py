@@ -14,7 +14,7 @@ from random import choice, random
 from locust import TaskSet, events, task
 from sentry_sdk.integrations.logging import LoggingIntegration
 
-from common.utils import path
+from common.utils import path, get_env_bool
 from pyload.nge import NGELocust
 
 sentry_logging = LoggingIntegration(
@@ -56,7 +56,8 @@ class Order(TaskSet):
 
         self.locust.user_auth_queue.put_nowait(user_data)
 
-        time.sleep(random())
+        if get_env_bool("DELAY_LOOP"):
+            time.sleep(random())
 
     @task(20)
     def order_cancel(self):
@@ -130,13 +131,16 @@ class NGE(NGELocust):
 
         self.order_price_list.extend(
             map(lambda x: float(os.environ.get("BASE_PRICE", 10000)) + 0.5 * x,
-                range(1, 51, 1)))
+                range(1, int(os.environ.get("LEVELS", 50)) + 1, 1)))
 
 
 if __name__ == "__main__":
     NGE.host = "http://47.103.74.144"
+    logging.basicConfig(level=logging.INFO)
 
-    os.environ["BASE_PRICE"] = "10230.0"
+    os.environ["BASE_PRICE"] = "10100.0"
+    os.environ["LEVELS"] = "100"
+    os.environ["DELAY_LOOP"] = "FALSE"
 
     ins = NGE()
 
