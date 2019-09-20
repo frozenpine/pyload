@@ -1,19 +1,17 @@
 # coding: utf-8
-
+import os
+import sys
 import csv
 
 from queue import Queue
+from random import choice
 
 try:
     from common.utils import path
     from clients.nge import nge, NGEAPIKeyAuthenticator
     from clients.sso import User
 except ImportError:
-    import sys
-    import os
-
     CURRENT_DIR = os.path.dirname(sys.argv[0])
-
     sys.path.append(os.path.join(CURRENT_DIR, "../"))
 
     from common.utils import path
@@ -22,15 +20,39 @@ except ImportError:
 
 
 if __name__ == "__main__":
-    host = "http://127.0.0.1"
+    host = "http://192.168.14.242:8201"
 
     client = nge(host=host)
 
     auth_queue = Queue()
 
-    user_file = path("@/CSV/users.csv")
+    base_price = float(os.environ.get("BASE_PRICE", 10000))
+    levels = int(os.environ.get("LEVELS", 50))
+    order_total = int(os.environ.get("ORDER_TOTAL", 10000))
 
-    with open(user_file) as f:
+    user_file = path("@/CSV/users.csv")
+    order_file = path("@/CSV/orders.csv")
+
+    price_list = list(map(
+        lambda x: base_price + 0.5 * x,
+        range(1, levels + 1, 1)
+    ))
+    volume_list = [1, 3, 5, 10, 15, 30, 50, 100]
+    directions = ("Buy", "Sell")
+
+    if not os.path.isfile(order_file):
+        with open(order_file, mode='w+', encoding='utf-8', newline='') as f:
+            order_writer = csv.DictWriter(
+                f, fieldnames=("symbol", "side", "price", "orderQty"))
+            order_writer.writeheader()
+            order_writer.writerows([{
+                'symbol': 'XBTUSD',
+                'side': choice(directions),
+                'price': choice(price_list),
+                'orderQty': choice(volume_list)
+            } for _ in range(order_total)])
+
+    with open(user_file, encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for user_data in reader:
             if not user_data["api_key"] or not user_data["api_secret"]:
@@ -42,10 +64,14 @@ if __name__ == "__main__":
 
             auth_queue.put_nowait(auth)
 
-    while not auth_queue.empty():
-        auth = auth_queue.get()
-        client.swagger_spec.http_client.authenticator = auth
+    with open(order_file, encoding="utf8") as f:
+        rd = csv.DictReader(f)
+        for order in rd:
+            auth = auth_queue.get()
+            auth_queue.put_nowait(auth)
 
-        result, rsp = client.Order.Order_cancelAll().result()
+            client.swagger_spec.http_client.authenticator = auth
 
-        print(rsp, result)
+            result, rsp = client.Order.Order_new(**order).result()
+
+            print(rsp, result)

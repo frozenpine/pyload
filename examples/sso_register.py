@@ -1,12 +1,20 @@
 # coding: utf-8
-
+import os
+import sys
 import time
 
 from random import sample
 from csv import DictWriter
 
-from common.utils import path
-from clients.sso import User
+try:
+    from common.utils import path
+    from clients.sso import User
+except ImportError:
+    CURRENT_DIR = os.path.dirname(sys.argv[0])
+    sys.path.append(os.path.join(CURRENT_DIR, "../"))
+
+    from common.utils import path
+    from clients.sso import User
 
 
 user_list = list()
@@ -16,10 +24,14 @@ if __name__ == "__main__":
     seed = ("1234567890abcdefghijklmnopqrstuvwxyz"
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+=-")
 
+    User.change_host("192.168.14.242", 8201)
+
+    user_total = int(os.environ.get("USER_TOTAL", 10))
+
     start = time.time()
-    for idx in range(10000):
+    for idx in range(user_total):
         user_data = {
-            "identity": "test{:05d}@quantdo.com.cn".format(idx + 1),
+            "identity": "test{:05d}@115bit.com".format(idx + 1),
             "password": "".join(sample(seed, 8))
         }
 
@@ -46,11 +58,11 @@ if __name__ == "__main__":
 
     end = time.time()
 
-    with open(path("@/CSV/Users.csv"), mode="w", encoding="utf-8") as f:
+    with open(path("@/CSV/users.csv"), mode="w", encoding="utf-8") as f:
         writer = DictWriter(f=f, fieldnames=["identity", "password",
                                              "api_key", "api_secret"])
         writer.writeheader()
         writer.writerows(user_list)
 
     print("user registered total: {}".format(len(user_list)))
-    print("rps: {}".format(round(10000/(end - start))))
+    print("rps: {}".format(round(user_total / (end - start))))
