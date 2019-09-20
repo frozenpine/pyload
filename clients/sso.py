@@ -24,6 +24,9 @@ def check_code(result):
     if "result" in result:
         result = result["result"]
 
+    if result is None:
+        return False
+
     if isinstance(result, int):
         return 0 == result
 
@@ -332,13 +335,37 @@ class User(object):
 
 
 if __name__ == "__main__":
-    host = ("test.365mex.com", 80)
+    from csv import DictWriter
+    from common.utils import path
+
+    # host = ("test.365mex.com", 80)
+    host = ("localhost", 8000)
 
     User.change_host(*host)
 
-    for id in range(1, 51):
-        user = User.register(identity="user{:02d}@qq.com".format(id),
-                             password="123456")
+    user_list = list()
 
-        print(user)
-        print(user.deposit())
+    for id in range(1, 11):
+        identity = "user{:02d}@qq.com".format(id)
+        user = User.register(identity=identity, password="123456")
+
+        if user:
+            print(user)
+            print(user.deposit(amount=18000000000))
+            user.get_api_key()
+            user_list.append(user)
+        else:
+            print("register failed:", identity)
+
+    with open(path("@/CSV/users.csv"),
+              mode="w", encoding="utf8", newline="") as f:
+        wr = DictWriter(f, fieldnames=('identity', 'password',
+                                       'api_key', 'api_secret'))
+
+        wr.writeheader()
+        wr.writerows([{
+            'identity': u.user_info['email'],
+            'password': "",
+            'api_key': u.api_key,
+            'api_secret': u.api_secret
+        } for u in user_list])
