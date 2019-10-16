@@ -9,18 +9,18 @@ from random import choice
 try:
     from common.utils import path
     from clients.nge import nge, NGEAPIKeyAuthenticator
-    from clients.sso import User
+    # from clients.sso import User
 except ImportError:
     CURRENT_DIR = os.path.dirname(sys.argv[0])
     sys.path.append(os.path.join(CURRENT_DIR, "../"))
 
     from common.utils import path
     from clients.nge import nge, NGEAPIKeyAuthenticator
-    from clients.sso import User
+    # from clients.sso import User
 
 
 if __name__ == "__main__":
-    host = "http://192.168.14.242:8201"
+    host = "http://localhost"
 
     client = nge(host=host)
 

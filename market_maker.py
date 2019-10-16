@@ -23,7 +23,7 @@ from clients.nge import nge, NGEAPIKeyAuthenticator
 from common.utils import path
 
 
-HOST = ("localhost", 80)
+HOST = ("47.103.74.144", 80)
 
 SYMBOL = "XBTUSD"
 

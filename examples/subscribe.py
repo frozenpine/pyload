@@ -2,7 +2,7 @@
 from datetime import datetime
 from time import sleep
 
-from bitmex_websocket import BitMEXWebsocket
+# from bitmex_websocket import BitMEXWebsocket
 from clients.nge_websocket import NGEWebsocket
 
 

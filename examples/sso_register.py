@@ -24,7 +24,7 @@ if __name__ == "__main__":
     seed = ("1234567890abcdefghijklmnopqrstuvwxyz"
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+=-")
 
-    User.change_host("192.168.14.242", 8201)
+    User.change_host("localhost", 80)
 
     user_total = int(os.environ.get("USER_TOTAL", 10))
 
@@ -48,6 +48,8 @@ if __name__ == "__main__":
         if not user.get_api_key():
             print("get key failed: {}".format(user_data))
             continue
+
+        user.deposit()
 
         user_data.update({
             'api_key': user.api_key,

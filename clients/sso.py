@@ -30,7 +30,7 @@ def check_code(result):
     if isinstance(result, int):
         return 0 == result
 
-    return "0" == result["code"]
+    return 0 == int(result["code"])
 
 
 class User(object):
